@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nairatee Stores - E-Commerce WhatsApp Control Center</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #059669;
+      --primary-dark: #047857;
+      --primary-light: #d1fae5;
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --font: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    header {
+      background-color: #0b1120;
+      border-bottom: 1px solid var(--card-border);
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      font-size: 28px;
+      background: rgba(5, 150, 105, 0.2);
+      padding: 6px;
+      border-radius: 10px;
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -0.5px;
+    }
+
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+      background: #1e293b;
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+    }
+
+    .nav-tab {
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .nav-tab.active {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    main {
+      max-width: 1300px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .stat-badge {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-weight: 700;
+    }
+
+    .badge-success { background: rgba(5, 150, 105, 0.2); color: #34d399; }
+    .badge-warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .badge-info { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .btn {
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: none;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    .btn-primary:hover { background: var(--primary-dark); }
+
+    .btn-secondary {
+      background: #334155;
+      color: #f8fafc;
+    }
+    .btn-secondary:hover { background: #475569; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      background: #0f172a;
+      padding: 14px 16px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    td {
+      padding: 16px;
+      border-bottom: 1px solid var(--card-border);
+      font-size: 14px;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .variant-chip {
+      display: inline-block;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      margin: 2px;
+    }
+
+    .payment-badge {
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .badge-pod { background: rgba(5, 150, 105, 0.2); color: #34d399; }
+    .badge-bank { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.8);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      padding: 20px;
+    }
+
+    .modal-overlay.active { display: flex; }
+
+    .modal {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      max-width: 600px;
+      width: 100%;
+      padding: 28px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+    }
+
+    .form-input, .form-textarea, .form-select {
+      width: 100%;
+      padding: 12px;
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: white;
+      font-family: inherit;
+      font-size: 14px;
+    }
+
+    .form-input:focus, .form-textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    .chat-simulator {
+      display: flex;
+      flex-direction: column;
+      height: 500px;
+      background: #0b1120;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      overflow: hidden;
+    }
+
+    .chat-messages {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg {
+      max-width: 75%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .msg-user {
+      align-self: flex-end;
+      background: #047857;
+      color: white;
+      border-bottom-right-radius: 2px;
+    }
+
+    .msg-bot {
+      align-self: flex-start;
+      background: #1e293b;
+      color: #f1f5f9;
+      border-bottom-left-radius: 2px;
+      white-space: pre-wrap;
+    }
+
+    .chat-input-bar {
+      display: flex;
+      padding: 12px;
+      background: #1e293b;
+      border-top: 1px solid var(--card-border);
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-icon">🛍️</div>
+      <div>
+        <div class="brand-title">Nairatee Stores</div>
+        <div class="brand-subtitle">E-Commerce WhatsApp Control Portal</div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <nav class="nav-tabs">
+        <button class="nav-tab active" onclick="switchTab('orders')">📦 Orders</button>
+        <button class="nav-tab" onclick="switchTab('products')">🏷️ Products & Variants</button>
+        <button class="nav-tab" onclick="switchTab('bulk')">📥 Bulk CSV Import</button>
+        <button class="nav-tab" onclick="switchTab('simulator')">💬 Bot Simulator</button>
+      </nav>
+      <button class="btn btn-secondary" onclick="logout()" style="padding: 6px 12px; font-size: 12px;">🔒 Logout</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Live Stats Bar -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Revenue</div>
+        <div class="stat-value" id="stat-revenue">₦0</div>
+        <span class="stat-badge badge-success">Completed & Verified</span>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Orders</div>
+        <div class="stat-value" id="stat-orders">0</div>
+        <span class="stat-badge badge-info" id="stat-pod-count">0 Pay on Delivery</span>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Live Catalog Products</div>
+        <div class="stat-value" id="stat-products">0</div>
+        <span class="stat-badge badge-info" id="stat-variants-count">0 Multi-Variants</span>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Database Status</div>
+        <div class="stat-value" style="font-size: 18px;" id="stat-db">Checking...</div>
+        <span class="stat-badge badge-success" id="stat-bot-status">WhatsApp Active</span>
+      </div>
+    </div>
+
+    <!-- TAB 1: ORDERS -->
+    <div id="tab-orders" class="tab-content active">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Live WhatsApp Orders</div>
+          <button class="btn btn-secondary" onclick="fetchOrders()">🔄 Refresh Orders</button>
+        </div>
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Order #</th>
+                <th>Customer</th>
+                <th>Items & Variants</th>
+                <th>Total</th>
+                <th>Payment Mode</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="orders-table-body">
+              <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading orders...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: PRODUCTS & VARIANTS -->
+    <div id="tab-products" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Product Catalog & Variant Options</div>
+          <button class="btn btn-primary" onclick="openAddProductModal()">➕ Add New Product</button>
+        </div>
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Image</th>
+                <th>Product Name</th>
+                <th>Category</th>
+                <th>Base Price</th>
+                <th>Configured Variants (Sizes / Colors)</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="products-table-body">
+              <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading products...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: BULK CSV IMPORT -->
+    <div id="tab-bulk" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Bulk Import (1,000 to 5,000 Products)</div>
+          <button class="btn btn-secondary" onclick="downloadSampleCSV()">📥 Download Sample CSV Template</button>
+        </div>
+        <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+          Easily populate thousands of products into the catalog with their sizes, colors, and prices. The chatbot indexes them instantly.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Paste CSV Content Below:</label>
+          <textarea id="bulk-csv-input" class="form-textarea" rows="10" placeholder="Category,Name,Price,Sizes,Colors,Description,Image_URL..."></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="submitBulkCSV()">🚀 Start Bulk Import</button>
+        <div id="bulk-import-result" style="margin-top: 16px;"></div>
+      </div>
+    </div>
+
+    <!-- TAB 4: WHATSAPP BOT SIMULATOR -->
+    <div id="tab-simulator" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Live WhatsApp Conversation Simulator</div>
+          <span style="font-size: 13px; color: var(--text-muted);">Test customer flows right in your browser!</span>
+        </div>
+        <div class="chat-simulator">
+          <div class="chat-messages" id="chat-messages">
+            <div class="msg msg-bot">👋 Welcome to Nairatee Stores! How can we assist you today? Try typing *"chopping board"* or *"knapsack sprayer"*.</div>
+          </div>
+          <div class="chat-input-bar">
+            <input type="text" id="chat-sim-input" class="form-input" placeholder="Type a message (e.g. 'Wooden chopping board', '1', 'Pay on Delivery')..." onkeypress="if(event.key==='Enter') sendSimMessage()">
+            <button class="btn btn-primary" onclick="sendSimMessage()">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ADD PRODUCT MODAL -->
+  <div id="add-product-modal" class="modal-overlay">
+    <div class="modal">
+      <div class="card-title" style="margin-bottom: 16px;">➕ Add Product with Variants</div>
+      <form onsubmit="handleCreateProduct(event)">
+        <div class="form-group">
+          <label class="form-label">Product Name *</label>
+          <input type="text" id="p-name" class="form-input" required placeholder="e.g. Premium Wooden Chopping Board">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Category *</label>
+          <select id="p-category" class="form-select">
+            <option value="Kitchen Wares">Kitchen Wares</option>
+            <option value="Agricultural Tools">Agricultural Tools</option>
+            <option value="Home & Cleaning">Home & Cleaning</option>
+            <option value="General">General</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Base Price (₦) *</label>
+          <input type="number" id="p-price" class="form-input" required placeholder="8500">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Sizes (Comma-separated)</label>
+          <input type="text" id="p-sizes" class="form-input" placeholder="e.g. Medium (30cm), Large (40cm)">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Colors (Comma-separated)</label>
+          <input type="text" id="p-colors" class="form-input" placeholder="e.g. Natural Wood, Red, Blue">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Image or Video URL</label>
+          <input type="url" id="p-image" class="form-input" placeholder="https://...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Product Description</label>
+          <textarea id="p-desc" class="form-textarea" rows="3" placeholder="Detailed product specifications..."></textarea>
+        </div>
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px;">
+          <button type="button" class="btn btn-secondary" onclick="closeAddProductModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Product & Variants</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    let adminApiKey = localStorage.getItem('nairatee_admin_key') || 'nairatee_admin_secret_2026';
+
+    function authHeaders() {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + adminApiKey
+      };
+    }
+
+    function checkAuth() {
+      if (!adminApiKey) {
+        adminApiKey = prompt('Enter Nairatee Stores Admin API Key:', 'nairatee_admin_secret_2026');
+        if (adminApiKey) localStorage.setItem('nairatee_admin_key', adminApiKey);
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('nairatee_admin_key');
+      adminApiKey = '';
+      checkAuth();
+      location.reload();
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + tabId).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/admin/stats', { headers: authHeaders() });
+        if (res.status === 401) {
+          adminApiKey = '';
+          checkAuth();
+          return;
+        }
+        const data = await res.json();
+        document.getElementById('stat-revenue').innerText = '₦' + (data.totalRevenue || 0).toLocaleString();
+        document.getElementById('stat-orders').innerText = data.totalOrders || 0;
+        document.getElementById('stat-pod-count').innerText = (data.podOrders || 0) + ' Pay on Delivery';
+        document.getElementById('stat-products').innerText = data.totalProducts || 0;
+        document.getElementById('stat-variants-count').innerText = (data.totalVariants || 0) + ' Multi-Variants';
+        document.getElementById('stat-db').innerText = data.databaseType || 'Ready';
+      } catch (err) {
+        console.error('Stats error:', err);
+      }
+    }
+
+    async function fetchOrders() {
+      try {
+        const res = await fetch('/api/admin/orders', { headers: authHeaders() });
+        const orders = await res.json();
+        const tbody = document.getElementById('orders-table-body');
+        tbody.innerHTML = '';
+
+        if (!orders || orders.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No orders placed yet.</td></tr>';
+          return;
+        }
+
+        orders.forEach(o => {
+          const item = (o.items && o.items[0]) || {};
+          const variantDesc = [item.color, item.size].filter(Boolean).join(' | ');
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><strong>${o.order_number}</strong><br><small style="color:var(--text-muted)">${new Date(o.created_at).toLocaleDateString()}</small></td>
+            <td><strong>${o.customer_name}</strong><br><small style="color:var(--text-muted)">${o.customer_phone}</small><br><small style="color:#94a3b8">${o.delivery_address}</small></td>
+            <td><strong>${item.product_name || 'Product'}</strong><br>${variantDesc ? '<span class="variant-chip">' + variantDesc + '</span>' : ''}</td>
+            <td><strong>₦${Number(o.total_amount).toLocaleString()}</strong></td>
+            <td><span class="payment-badge ${o.payment_method === 'POD' ? 'badge-pod' : 'badge-bank'}">${o.payment_method === 'POD' ? '🚚 POD' : '🏦 Bank Transfer'}</span></td>
+            <td><span class="stat-badge badge-${o.order_status === 'DELIVERED' ? 'success' : o.order_status === 'CONFIRMED' ? 'info' : 'warning'}">${o.order_status}</span></td>
+            <td>
+              <select onchange="updateOrderStatus('${o.id}', this.value)" class="form-select" style="padding: 4px 8px; font-size: 12px; width: auto;">
+                <option value="PENDING" ${o.order_status==='PENDING'?'selected':''}>Pending</option>
+                <option value="CONFIRMED" ${o.order_status==='CONFIRMED'?'selected':''}>Confirmed</option>
+                <option value="DISPATCHED" ${o.order_status==='DISPATCHED'?'selected':''}>Dispatched</option>
+                <option value="DELIVERED" ${o.order_status==='DELIVERED'?'selected':''}>Delivered</option>
+                <option value="CANCELLED" ${o.order_status==='CANCELLED'?'selected':''}>Cancelled</option>
+              </select>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error('Fetch orders error:', err);
+      }
+    }
+
+    async function updateOrderStatus(orderId, newStatus) {
+      try {
+        await fetch('/api/admin/orders/' + orderId + '/status', {
+          method: 'PATCH',
+          headers: authHeaders(),
+          body: JSON.stringify({ order_status: newStatus })
+        });
+        loadStats();
+        fetchOrders();
+      } catch (err) {
+        alert('Failed to update status');
+      }
+    }
+
+    async function fetchProducts() {
+      try {
+        const res = await fetch('/api/admin/products', { headers: authHeaders() });
+        const products = await res.json();
+        const tbody = document.getElementById('products-table-body');
+        tbody.innerHTML = '';
+
+        products.forEach(p => {
+          const variants = p.variants || [];
+          const variantChips = variants.map(v => {
+            const desc = [v.color, v.size].filter(Boolean).join(' - ');
+            return `<span class="variant-chip">${desc} (₦${Number(v.price).toLocaleString()})</span>`;
+          }).join(' ');
+
+          const imgUrl = (p.media_urls && p.media_urls[0]) || 'https://via.placeholder.com/60?text=No+Img';
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><img src="${imgUrl}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 8px;"></td>
+            <td><strong>${p.name}</strong><br><small style="color:var(--text-muted)">SKU: ${p.sku || 'N/A'}</small></td>
+            <td><span class="stat-badge badge-info">${p.category_name}</span></td>
+            <td><strong>₦${Number(p.base_price).toLocaleString()}</strong></td>
+            <td>${variantChips || '<span style="color:var(--text-muted); font-size:12px;">Standard (No Variants)</span>'}</td>
+            <td>
+              <button class="btn btn-secondary" onclick="deleteProduct('${p.id}')" style="padding: 4px 8px; font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #f87171;">🗑️ Delete</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error('Fetch products error:', err);
+      }
+    }
+
+    function openAddProductModal() {
+      document.getElementById('add-product-modal').classList.add('active');
+    }
+    function closeAddProductModal() {
+      document.getElementById('add-product-modal').classList.remove('active');
+    }
+
+    async function handleCreateProduct(e) {
+      e.preventDefault();
+      const name = document.getElementById('p-name').value;
+      const category_name = document.getElementById('p-category').value;
+      const base_price = parseFloat(document.getElementById('p-price').value);
+      const sizes = document.getElementById('p-sizes').value.split(',').map(s=>s.trim()).filter(Boolean);
+      const colors = document.getElementById('p-colors').value.split(',').map(c=>c.trim()).filter(Boolean);
+      const image = document.getElementById('p-image').value;
+      const description = document.getElementById('p-desc').value;
+
+      const variants = [];
+      if (sizes.length > 0 || colors.length > 0) {
+        const sizeList = sizes.length > 0 ? sizes : ['Standard'];
+        const colorList = colors.length > 0 ? colors : ['Default'];
+        sizeList.forEach(sz => {
+          colorList.forEach(col => {
+            variants.push({
+              size: sz !== 'Standard' ? sz : null,
+              color: col !== 'Default' ? col : null,
+              price: base_price,
+              stock_quantity: 50
+            });
+          });
+        });
+      }
+
+      await fetch('/api/admin/products', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          name, category_name, base_price, description,
+          media_urls: image ? [image] : [],
+          variants
+        })
+      });
+
+      closeAddProductModal();
+      loadStats();
+      fetchProducts();
+    }
+
+    async function deleteProduct(id) {
+      if (!confirm('Are you sure you want to remove this product?')) return;
+      await fetch('/api/admin/products/' + id, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+      loadStats();
+      fetchProducts();
+    }
+
+    function downloadSampleCSV() {
+      const csv = `Category,Name,Price,Sizes,Colors,Description,Image_URL\nKitchen Wares,Wooden Chopping Board,8500,"Medium, Large","Natural Wood, Red Rim","Durable hardwood kitchen cutting board with groove",https://images.unsplash.com/photo-1590794056226-79ef3a8147e1?w=800\nAgricultural Tools,Knapsack Sprayer,28000,"16 Litres, 20 Litres","Electric Blue, Safety Yellow","Heavy-duty manual and battery crop sprayer",https://images.unsplash.com/photo-1592417817098-8f3d6910985c?w=800`;
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'nairatee_bulk_products_template.csv';
+      a.click();
+    }
+
+    async function submitBulkCSV() {
+      const csv = document.getElementById('bulk-csv-input').value;
+      if (!csv.trim()) { alert('Please paste CSV content'); return; }
+
+      const resultDiv = document.getElementById('bulk-import-result');
+      resultDiv.innerHTML = '<span style="color:var(--accent)">Importing products...</span>';
+
+      const res = await fetch('/api/admin/products/bulk', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ csv_content: csv })
+      });
+      const data = await res.json();
+      resultDiv.innerHTML = `<span style="color:#34d399">✅ Successfully imported ${data.successful} of ${data.total} products!</span>`;
+      loadStats();
+      fetchProducts();
+    }
+
+    // Bot Simulator
+    async function sendSimMessage() {
+      const input = document.getElementById('chat-sim-input');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+
+      const container = document.getElementById('chat-messages');
+      container.innerHTML += `<div class="msg msg-user">${text}</div>`;
+      container.scrollTop = container.scrollHeight;
+
+      try {
+        const res = await fetch('/api/admin/simulate', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ text, phone: '2348011223344' })
+        });
+        const data = await res.json();
+        // The mock will log to terminal and handle states.
+        setTimeout(() => {
+          loadStats();
+          fetchOrders();
+        }, 500);
+      } catch (err) {
+        console.error('Sim error:', err);
+      }
+    }
+
+    // Initial load
+    checkAuth();
+    loadStats();
+    fetchOrders();
+    fetchProducts();
+  </script>
+</body>
+</html>

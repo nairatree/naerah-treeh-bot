@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: nairatee-stores-bot
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4001
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: BOTSAILOR_API_KEY
+        sync: false
+      - key: BOTSAILOR_WHATSAPP_BOT_ID
+        sync: false
+      - key: BOTSAILOR_BASE_URL
+        value: https://botsailor.com/api/v1
+      - key: STORE_NAME
+        value: Naerah Treeh Stores
+      - key: BANK_NAME
+        value: MONIEPOINT MFB
+      - key: BANK_ACCOUNT_NUMBER
+        value: 9047125385
+      - key: BANK_ACCOUNT_NAME
+        value: NAERAH TREEH BUSINESS VENTURES
+      - key: ADMIN_PHONES
+        sync: false

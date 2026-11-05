@@ -1,0 +1,38 @@
+{
+  "name": "nairatee-stores-chatbot",
+  "version": "1.0.0",
+  "description": "Nairatee Stores - WhatsApp E-Commerce Assistant, Variant Management & Admin Platform",
+  "type": "module",
+  "main": "src/server.ts",
+  "scripts": {
+    "start": "node --experimental-strip-types src/server.ts",
+    "dev": "node --watch --experimental-strip-types src/server.ts",
+    "test": "node --env-file=.env.test --experimental-strip-types --test tests/**/*.test.ts"
+  },
+  "keywords": [
+    "nairatee",
+    "ecommerce",
+    "whatsapp",
+    "botsailor",
+    "supabase",
+    "variant-management",
+    "pay-on-delivery"
+  ],
+  "author": "Antigravity Engineering",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.9"
+  }
+}
