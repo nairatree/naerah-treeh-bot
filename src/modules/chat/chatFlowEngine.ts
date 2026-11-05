@@ -178,6 +178,21 @@ export class ChatFlowEngine {
     const variants = topProduct.variants || [];
     if (variants.length > 0) {
       chatSessionManager.setState(phoneNumber, 'SELECTING_VARIANT');
+      // If 3 or fewer variants, also offer interactive quick reply buttons!
+      if (variants.length <= 3) {
+        const buttons = variants.map((v, idx) => {
+          const label = [v.color, v.size].filter(Boolean).join(' ') || `Option ${idx + 1}`;
+          return {
+            text: label.substring(0, 20),
+            payload: String(idx + 1),
+          };
+        });
+        await botsailorClient.sendQuickReplyButtons(
+          phoneNumber,
+          `🎨 *Tap your preferred option below:*`,
+          buttons
+        );
+      }
     } else {
       // No variants, move straight to payment method choice
       chatSessionManager.setState(phoneNumber, 'CHOOSING_PAYMENT_METHOD');
@@ -186,7 +201,7 @@ export class ChatFlowEngine {
   }
 
   /**
-   * Handle Variant Selection (e.g. user replies '1', '2', etc.)
+   * Handle Variant Selection (Supports button taps, option numbers, or variant names)
    */
   async handleVariantSelection(phoneNumber: string, text: string, session: any): Promise<void> {
     const product = session.context.currentProduct;
@@ -195,18 +210,31 @@ export class ChatFlowEngine {
       return;
     }
 
+    const cleanLower = text.trim().toLowerCase();
     const choiceIdx = parseInt(text.replace(/\D/g, ''), 10) - 1;
     const variants = product.variants;
 
-    if (isNaN(choiceIdx) || choiceIdx < 0 || choiceIdx >= variants.length) {
+    let selectedVariant = (!isNaN(choiceIdx) && choiceIdx >= 0 && choiceIdx < variants.length)
+      ? variants[choiceIdx]
+      : undefined;
+
+    // If not a number index, check if user tapped a button or typed a color/size
+    if (!selectedVariant) {
+      selectedVariant = variants.find((v: any) => {
+        const colorMatch = v.color && cleanLower.includes(v.color.toLowerCase());
+        const sizeMatch = v.size && cleanLower.includes(v.size.toLowerCase());
+        return colorMatch || sizeMatch;
+      });
+    }
+
+    if (!selectedVariant) {
       await botsailorClient.sendTextMessage(
         phoneNumber,
-        `⚠️ Please reply with a valid option number between *1* and *${variants.length}*.`
+        `⚠️ Please reply with a valid option number between *1* and *${variants.length}*, or tap an option button.`
       );
       return;
     }
 
-    const selectedVariant = variants[choiceIdx];
     chatSessionManager.setSelectedVariant(phoneNumber, selectedVariant);
     chatSessionManager.setState(phoneNumber, 'CHOOSING_PAYMENT_METHOD');
 
@@ -223,20 +251,23 @@ export class ChatFlowEngine {
   }
 
   /**
-   * Prompt Payment Method (POD vs Bank Transfer)
+   * Prompt Payment Method using Interactive WhatsApp Quick-Reply Buttons!
    */
   async promptPaymentMethod(phoneNumber: string, productName: string, price: number, variantText?: string): Promise<void> {
     const formattedPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(price);
 
-    let msg = `💳 *HOW WOULD YOU LIKE TO PAY?*\n\n`;
-    msg += `1️⃣ *Pay on Delivery (POD)*\n`;
-    msg += `   _Pay ${formattedPrice} cash or instant transfer to our delivery rider at your doorstep._\n\n`;
-    msg += `2️⃣ *Pay Now (Bank Transfer)*\n`;
-    msg += `   _Transfer directly to our official company bank account now._\n\n`;
-    msg += `3️⃣ *Talk to Human Support*\n\n`;
-    msg += `👉 *Reply with 1, 2, or 3 to proceed.*`;
+    const bodyText = `💳 *HOW WOULD YOU LIKE TO PAY?*\n\n🛍️ *Item:* ${productName} ${variantText ? `(${variantText})` : ''}\n💰 *Total:* ${formattedPrice}\n\nTap your preferred checkout option below:`;
 
-    await botsailorClient.sendTextMessage(phoneNumber, msg);
+    await botsailorClient.sendQuickReplyButtons(
+      phoneNumber,
+      bodyText,
+      [
+        { text: '🚚 Pay on Delivery', payload: '1' },
+        { text: '🏦 Bank Transfer', payload: '2' },
+        { text: '💬 Talk to Support', payload: '3' },
+      ],
+      'Payment Selection'
+    );
   }
 
   /**
