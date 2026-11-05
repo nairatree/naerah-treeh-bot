@@ -16,10 +16,16 @@ export class CatalogService {
   }
 
   /**
-   * Format product message for WhatsApp presentation
+   * Format product message for WhatsApp presentation (Prioritizes video if available, falls back to picture)
    */
-  formatProductMessage(product: Product): { text: string; mediaUrl?: string } {
-    const mediaUrl = product.media_urls?.[0];
+  formatProductMessage(product: Product): { text: string; mediaUrl?: string; mediaType: 'image' | 'video' } {
+    const urls = product.media_urls || [];
+    // Prioritize video if available, otherwise picture
+    const videoUrl = urls.find((u) => /\.(mp4|mov|webm|avi|m4v)($|\?)/i.test(u) || u.toLowerCase().includes('/video/'));
+    const imageUrl = urls.find((u) => !/\.(mp4|mov|webm|avi|m4v)($|\?)/i.test(u) && !u.toLowerCase().includes('/video/')) || urls[0];
+
+    const selectedMedia = videoUrl || imageUrl;
+    const mediaType: 'image' | 'video' = videoUrl ? 'video' : 'image';
     const baseFormattedPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(product.base_price);
 
     let text = `🛍️ *${product.name.toUpperCase()}*\n`;
@@ -42,7 +48,7 @@ export class CatalogService {
       text += `👉 *Reply "BUY" to place your order.*`;
     }
 
-    return { text, mediaUrl };
+    return { text, mediaUrl: selectedMedia, mediaType };
   }
 
   /**
@@ -101,7 +107,13 @@ export class CatalogService {
       const category = rowData['category'] || rowData['category_name'] || 'General';
       const price = parseFloat(rowData['price'] || rowData['base_price'] || '0') || 0;
       const description = rowData['description'] || name;
-      const imageUrl = rowData['image_url'] || rowData['image'] || rowData['media_url'];
+      const imageUrl = rowData['image_url'] || rowData['image'] || rowData['picture'];
+      const videoUrl = rowData['video_url'] || rowData['video'];
+      const mediaList: string[] = [];
+      if (videoUrl) mediaList.push(videoUrl);
+      if (imageUrl) mediaList.push(imageUrl);
+      if (mediaList.length === 0 && rowData['media_url']) mediaList.push(rowData['media_url']);
+
       const sizes = (rowData['sizes'] || rowData['size'] || '').split(/[,;|]/).map((s) => s.trim()).filter(Boolean);
       const colors = (rowData['colors'] || rowData['color'] || '').split(/[,;|]/).map((c) => c.trim()).filter(Boolean);
 
@@ -136,7 +148,7 @@ export class CatalogService {
             category_name: category,
             base_price: price,
             description,
-            media_urls: imageUrl ? [imageUrl] : [],
+            media_urls: mediaList,
           },
           variantsData
         );

@@ -40,6 +40,7 @@ export class ChatFlowEngine {
           cleanPhone,
           `👩‍💼 *Live Customer Support*\n\nA customer care representative has been notified and will join this chat shortly to assist you.\n\n_(Type *MENU* anytime to resume automated shopping)._`
         );
+        await this.notifySupportTeam(cleanPhone, session);
         return;
       }
 
@@ -49,6 +50,7 @@ export class ChatFlowEngine {
           cleanPhone,
           `👩‍💼 *Customer Support Assigned*\n\nOne of our human agents will attend to you here shortly.\n\n_(Type *MENU* anytime to return to the catalog)._`
         );
+        await this.notifySupportTeam(cleanPhone, session);
         return;
       }
     }
@@ -159,7 +161,7 @@ export class ChatFlowEngine {
     const formatted = catalogService.formatProductMessage(topProduct);
 
     if (formatted.mediaUrl) {
-      await botsailorClient.sendMediaMessage(phoneNumber, formatted.mediaUrl, 'image', formatted.text);
+      await botsailorClient.sendMediaMessage(phoneNumber, formatted.mediaUrl, formatted.mediaType, formatted.text);
     } else {
       await botsailorClient.sendTextMessage(phoneNumber, formatted.text);
     }
@@ -414,6 +416,35 @@ export class ChatFlowEngine {
     ack += `Customers can now find and purchase this item on WhatsApp! 🚀`;
 
     await botsailorClient.sendTextMessage(phoneNumber, ack);
+  }
+
+  /**
+   * Dispatches WhatsApp alert to human support staff phone number
+   */
+  async notifySupportTeam(customerPhone: string, session: any): Promise<void> {
+    try {
+      const supportPhone = config.SUPPORT_PHONE_NUMBER.replace(/\D/g, '');
+      if (!supportPhone || supportPhone === '2348000000000') {
+        return;
+      }
+
+      const item = session.context.currentProduct?.name || 'Browsing Catalog';
+      const variant = session.context.selectedVariant
+        ? [session.context.selectedVariant.color, session.context.selectedVariant.size].filter(Boolean).join(' - ')
+        : 'None selected yet';
+
+      let alert = `🚨 *LIVE CUSTOMER SUPPORT ALERT!* 🚨\n\n`;
+      alert += `A customer requested human assistance on WhatsApp:\n`;
+      alert += `• *Customer Phone:* +${customerPhone}\n`;
+      alert += `• *Product of Interest:* ${item}\n`;
+      alert += `• *Selected Variant:* ${variant}\n\n`;
+      alert += `👉 *Tap to chat with customer directly:* https://wa.me/${customerPhone}`;
+
+      await botsailorClient.sendTextMessage(supportPhone, alert);
+      logger.info(`Dispatched support alert to staff (${supportPhone}) for customer (+${customerPhone})`);
+    } catch (err: any) {
+      logger.error('Failed to dispatch support alert to staff WhatsApp:', err.message);
+    }
   }
 }
 
