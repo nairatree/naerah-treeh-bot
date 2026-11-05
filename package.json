@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node --experimental-strip-types src/server.ts",
     "dev": "node --watch --experimental-strip-types src/server.ts",
-    "test": "node --env-file=.env.test --experimental-strip-types --test tests/**/*.test.ts"
+    "test": "node --env-file=.env --experimental-strip-types --test tests/**/*.test.ts"
   },
   "keywords": [
     "nairatee",

@@ -164,4 +164,21 @@ export const adminController = {
       res.status(500).json({ error: 'Failed to update settings' });
     }
   },
+
+  async toggleBotStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const current = await db.getStoreSettings();
+      const newStatus = typeof req.body.is_bot_active === 'boolean'
+        ? req.body.is_bot_active
+        : !current.is_bot_active;
+
+      await db.updateStoreSettings({ is_bot_active: newStatus });
+      const updated = await db.getStoreSettings();
+      logger.info(`Bot status toggled by admin to: ${updated.is_bot_active ? 'ACTIVE' : 'PAUSED'}`);
+      res.json({ status: 'success', is_bot_active: updated.is_bot_active });
+    } catch (err: any) {
+      logger.error('Failed to toggle bot status:', err.message);
+      res.status(500).json({ error: 'Failed to toggle bot status' });
+    }
+  },
 };

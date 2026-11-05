@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger.ts';
 class ChatSessionManager {
   private sessions = new Map<string, ChatSession>();
   private readonly TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours Session Window
+  private readonly INACTIVITY_RESET_MS = 30 * 60 * 1000; // 30 Minutes Inactivity Reset
 
   getSession(phoneNumber: string): ChatSession {
     const cleanPhone = phoneNumber.replace(/\D/g, '');
@@ -21,6 +22,11 @@ class ChatSessionManager {
         updatedAt: now,
       };
       this.sessions.set(cleanPhone, session);
+    } else if (session.state !== 'IDLE' && session.state !== 'HANDED_OVER_TO_SUPPORT' && now - session.updatedAt > this.INACTIVITY_RESET_MS) {
+      // Inactivity timeout: reset state back to IDLE so casual chats aren't captured as order responses
+      logger.info(`Session for ${cleanPhone} timed out after 30 mins. Resetting to IDLE.`);
+      session.state = 'IDLE';
+      session.context = { lastActiveTime: now };
     }
 
     session.updatedAt = now;

@@ -22,6 +22,16 @@ export class ChatFlowEngine {
 
     logger.info(`Processing message from ${cleanPhone}: "${cleanText}" (Media: ${mediaUrl ? 'Yes' : 'No'})`);
 
+    const settings = await db.getStoreSettings();
+
+    // 0. MASTER KILLSWITCH: If bot is turned OFF, stay 100% silent!
+    if (settings.is_bot_active === false) {
+      logger.info(`[KILLSWITCH ACTIVE] Bot is currently PAUSED. Silently ignoring message from ${cleanPhone}.`);
+      return;
+    }
+
+    const session = chatSessionManager.getSession(cleanPhone);
+
     // 1. Check for Admin /add WhatsApp Command
     if (lowerText.startsWith('/add')) {
       const isAdmin = config.adminPhoneList.includes(cleanPhone) || config.adminPhoneList.includes('2348000000000');
@@ -32,61 +42,61 @@ export class ChatFlowEngine {
     }
 
     // 2. Check for Live Human Support Trigger
-    if (['agent', 'support', 'human', 'help', 'representative', 'talk to agent', '3'].includes(lowerText)) {
-      const session = chatSessionManager.getSession(cleanPhone);
-      if (session.state === 'CHOOSING_PAYMENT_METHOD' && lowerText === '3') {
-        chatSessionManager.handoverToSupport(cleanPhone);
-        await botsailorClient.sendTextMessage(
-          cleanPhone,
-          `👩‍💼 *Live Customer Support*\n\nA customer care representative has been notified and will join this chat shortly to assist you.\n\n_(Type *MENU* anytime to resume automated shopping)._`
-        );
-        await this.notifySupportTeam(cleanPhone, session);
-        return;
-      }
-
-      if (['agent', 'support', 'human', 'representative', 'talk to agent'].some((k) => lowerText.includes(k))) {
-        chatSessionManager.handoverToSupport(cleanPhone);
-        await botsailorClient.sendTextMessage(
-          cleanPhone,
-          `👩‍💼 *Customer Support Assigned*\n\nOne of our human agents will attend to you here shortly.\n\n_(Type *MENU* anytime to return to the catalog)._`
-        );
-        await this.notifySupportTeam(cleanPhone, session);
-        return;
-      }
+    if (
+      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'customer care'].some((k) =>
+        lowerText.includes(k)
+      ) ||
+      (session.state === 'CHOOSING_PAYMENT_METHOD' && lowerText === '3')
+    ) {
+      chatSessionManager.handoverToSupport(cleanPhone);
+      await botsailorClient.sendTextMessage(
+        cleanPhone,
+        `👩‍💼 *Live Customer Support Assigned*\n\nA representative has been notified and will assist you here shortly.\n\n_(Type *MENU* anytime to resume automated shopping)._`
+      );
+      await this.notifySupportTeam(cleanPhone, session);
+      return;
     }
 
-    // 3. Check for Reset / Menu Command
-    if (['menu', 'start', 'restart', 'reset', 'hi', 'hello', 'hey'].includes(lowerText)) {
+    // 3. Human Support Handover Protection:
+    // If user is currently handed over to human support, don't interfere unless they explicitly type MENU/RESTART
+    if (session.state === 'HANDED_OVER_TO_SUPPORT') {
+      if (['menu', 'catalog', 'start', 'restart', 'reset'].includes(lowerText)) {
+        chatSessionManager.resetSession(cleanPhone);
+        await this.sendWelcomeMenu(cleanPhone);
+        return;
+      }
+      logger.info(`User ${cleanPhone} is in human support mode. Ignoring message to let human staff converse.`);
+      return;
+    }
+
+    // 4. Check for Explicit Reset / Menu Commands
+    if (['menu', 'catalog', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       await this.sendWelcomeMenu(cleanPhone);
       return;
     }
 
-    // 4. Retrieve Current Conversation State
-    const session = chatSessionManager.getSession(cleanPhone);
-
-    // If session is already handed over to human support, don't interfere unless they type MENU
-    if (session.state === 'HANDED_OVER_TO_SUPPORT') {
-      logger.info(`User ${cleanPhone} is in human support mode. Ignoring bot automated processing.`);
-      return;
-    }
-
     // 5. Handling Payment Receipt Upload
-    if (session.state === 'AWAITING_PAYMENT_RECEIPT' || (mediaUrl && (lowerText.includes('paid') || lowerText.includes('receipt') || lowerText.includes('transfer')))) {
+    if (
+      session.state === 'AWAITING_PAYMENT_RECEIPT' ||
+      (mediaUrl && (lowerText.includes('paid') || lowerText.includes('receipt') || lowerText.includes('transfer')))
+    ) {
       if (mediaUrl || lowerText.includes('paid') || lowerText.includes('done')) {
         if (session.context.pendingOrderNumber && mediaUrl) {
           await db.attachReceiptUrl(session.context.pendingOrderNumber, mediaUrl);
         }
         await botsailorClient.sendTextMessage(
           cleanPhone,
-          `✅ *Payment Proof Received!*\n\nThank you for providing your receipt. Our accounts team will verify your transfer and your order will be dispatched promptly! 🚚✨\n\nOrder Ref: *${session.context.pendingOrderNumber || 'Pending'}*`
+          `✅ *Payment Proof Received!*\n\nThank you for providing your receipt. Our accounts team will verify your transfer and your order will be dispatched promptly! 🚚✨\n\nOrder Ref: *${
+            session.context.pendingOrderNumber || 'Pending'
+          }*`
         );
         chatSessionManager.setState(cleanPhone, 'IDLE');
         return;
       }
     }
 
-    // 6. State Machine Routing
+    // 6. State Machine Routing for Active Conversations
     switch (session.state) {
       case 'SELECTING_VARIANT':
         await this.handleVariantSelection(cleanPhone, cleanText, session);
@@ -103,10 +113,94 @@ export class ChatFlowEngine {
       case 'IDLE':
       case 'BROWSING_PRODUCTS':
       default:
-        // Treat as a product search or category exploration
-        await this.handleProductSearch(cleanPhone, cleanText);
+        // Smart Idle Handling: Only responds to product matches or explicit shopping intent!
+        await this.handleIdleMessage(cleanPhone, cleanText, lowerText, settings);
         return;
     }
+  }
+
+  /**
+   * Smart Idle Message Handler:
+   * 1. Searches catalog for product match (e.g. from Meta Ads or organic search).
+   * 2. If matched -> presents product and variants.
+   * 3. If no match BUT user used shopping keywords (e.g. "buy", "price", "order", "cost") -> polite guidance.
+   * 4. If no match AND no shopping intent (casual chats like "where are you", "ok", "good morning") -> 100% SILENT.
+   */
+  async handleIdleMessage(
+    phoneNumber: string,
+    cleanText: string,
+    lowerText: string,
+    settings: Record<string, any>
+  ): Promise<void> {
+    if (!cleanText || cleanText.length < 2) {
+      logger.info(`Ignoring short idle message from ${phoneNumber}: "${cleanText}"`);
+      return;
+    }
+
+    // Attempt catalog search
+    const results = await catalogService.search(cleanText);
+
+    if (results.length > 0) {
+      // 1. Direct Product Match Found!
+      const topProduct = results[0];
+      chatSessionManager.setCurrentProduct(phoneNumber, topProduct);
+
+      const formatted = catalogService.formatProductMessage(topProduct);
+      if (formatted.mediaUrl) {
+        await botsailorClient.sendMediaMessage(phoneNumber, formatted.mediaUrl, formatted.mediaType, formatted.text);
+      } else {
+        await botsailorClient.sendTextMessage(phoneNumber, formatted.text);
+      }
+
+      const variants = topProduct.variants || [];
+      if (variants.length > 0) {
+        chatSessionManager.setState(phoneNumber, 'SELECTING_VARIANT');
+        if (variants.length <= 3) {
+          const buttons = variants.map((v, idx) => {
+            const label = [v.color, v.size].filter(Boolean).join(' ') || `Option ${idx + 1}`;
+            return {
+              text: label.substring(0, 20),
+              payload: String(idx + 1),
+            };
+          });
+          await botsailorClient.sendQuickReplyButtons(phoneNumber, `🎨 *Tap your preferred option below:*`, buttons);
+        }
+      } else {
+        chatSessionManager.setState(phoneNumber, 'CHOOSING_PAYMENT_METHOD');
+        await this.promptPaymentMethod(phoneNumber, topProduct.name, topProduct.base_price);
+      }
+      return;
+    }
+
+    // 2. No Product Found: Check for Shopping Intent Keywords
+    const shoppingIntentKeywords = [
+      'order', 'buy', 'price', 'cost', 'how much', 'do you have', 'stock',
+      'deliver', 'delivery', 'sell', 'discount', 'purchase', 'shipping',
+      'available', 'pay on delivery', 'payment', 'transfer', 'wholesale', 'catalog', 'item'
+    ];
+    const hasShoppingIntent = shoppingIntentKeywords.some((k) => lowerText.includes(k));
+
+    if (hasShoppingIntent) {
+      // User is genuinely trying to buy/inquire about something not in catalog
+      let msg = `😕 Sorry, we couldn't find an exact match for *"${cleanText}"* in our current catalog.\n\n`;
+      msg += `📂 *Browse our categories:*\n`;
+      msg += `1️⃣ *Kitchen Wares*\n`;
+      msg += `2️⃣ *Agricultural Tools*\n`;
+      msg += `3️⃣ *Home & Cleaning*\n\n`;
+      msg += `👉 Type *CATALOG* to see all items.\n`;
+      msg += `👉 Type *SUPPORT* to ask our sales representative.`;
+
+      if (settings.whatsapp_group_link) {
+        msg += `\n\n📲 *Join our VIP WhatsApp Group for daily stock:*\n${settings.whatsapp_group_link}`;
+      }
+
+      await botsailorClient.sendTextMessage(phoneNumber, msg);
+      return;
+    }
+
+    // 3. Casual / Unrelated Message (Friends, family, personal contacts):
+    // DO NOT RESPOND! Stay 100% silent so human conversations are completely untouched!
+    logger.info(`[ANTI-INTERFERENCE] Ignoring casual non-store message from ${phoneNumber}: "${cleanText}"`);
   }
 
   /**
@@ -137,67 +231,11 @@ export class ChatFlowEngine {
   }
 
   /**
-   * Search Products & Present Top Match with Variants
+   * Search Products & Present Top Match with Variants (delegates to smart handler)
    */
   async handleProductSearch(phoneNumber: string, query: string): Promise<void> {
-    if (!query || query.length < 2) {
-      await this.sendWelcomeMenu(phoneNumber);
-      return;
-    }
-
-    const [results, settings] = await Promise.all([catalogService.search(query), db.getStoreSettings()]);
-
-    if (results.length === 0) {
-      let msg = `😕 Sorry, we couldn't find an exact match for *"${query}"*.\n\n`;
-      msg += `Please try another keyword, or check our categories:\n`;
-      msg += `1️⃣ *Kitchen Wares*\n`;
-      msg += `2️⃣ *Agricultural Tools*\n`;
-      msg += `3️⃣ *Home & Cleaning*\n\n`;
-      msg += `_Or reply *SUPPORT* to have our representative check stock for you!_`;
-
-      if (settings.whatsapp_group_link) {
-        msg += `\n\n📲 *Join our WhatsApp Group to browse 500+ items:*\n${settings.whatsapp_group_link}`;
-      }
-
-      await botsailorClient.sendTextMessage(phoneNumber, msg);
-      return;
-    }
-
-    // Top Match Found
-    const topProduct = results[0];
-    chatSessionManager.setCurrentProduct(phoneNumber, topProduct);
-
-    const formatted = catalogService.formatProductMessage(topProduct);
-
-    if (formatted.mediaUrl) {
-      await botsailorClient.sendMediaMessage(phoneNumber, formatted.mediaUrl, formatted.mediaType, formatted.text);
-    } else {
-      await botsailorClient.sendTextMessage(phoneNumber, formatted.text);
-    }
-
-    const variants = topProduct.variants || [];
-    if (variants.length > 0) {
-      chatSessionManager.setState(phoneNumber, 'SELECTING_VARIANT');
-      // If 3 or fewer variants, also offer interactive quick reply buttons!
-      if (variants.length <= 3) {
-        const buttons = variants.map((v, idx) => {
-          const label = [v.color, v.size].filter(Boolean).join(' ') || `Option ${idx + 1}`;
-          return {
-            text: label.substring(0, 20),
-            payload: String(idx + 1),
-          };
-        });
-        await botsailorClient.sendQuickReplyButtons(
-          phoneNumber,
-          `🎨 *Tap your preferred option below:*`,
-          buttons
-        );
-      }
-    } else {
-      // No variants, move straight to payment method choice
-      chatSessionManager.setState(phoneNumber, 'CHOOSING_PAYMENT_METHOD');
-      await this.promptPaymentMethod(phoneNumber, topProduct.name, topProduct.base_price);
-    }
+    const settings = await db.getStoreSettings();
+    await this.handleIdleMessage(phoneNumber, query, query.toLowerCase(), settings);
   }
 
   /**

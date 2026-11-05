@@ -18,5 +18,6 @@ adminRouter.patch('/orders/:id/status', adminController.updateOrderStatus);
 
 adminRouter.get('/settings', adminController.getSettings);
 adminRouter.post('/settings', adminController.updateSettings);
+adminRouter.post('/toggle-bot', adminController.toggleBotStatus);
 
 adminRouter.post('/simulate', adminController.simulateMessage);

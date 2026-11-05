@@ -177,45 +177,71 @@ export const db = {
 
   async searchProducts(query: string): Promise<Product[]> {
     const cleanQuery = query.toLowerCase().trim();
+    if (!cleanQuery || cleanQuery.length < 2) return [];
+
+    const stopWords = new Set([
+      'i', 'want', 'need', 'to', 'buy', 'get', 'a', 'an', 'the', 'is', 'for', 'in', 'of', 'and', 'or',
+      'please', 'me', 'you', 'your', 'my', 'he', 'she', 'it', 'they', 'we', 'are', 'were', 'was', 'am',
+      'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'can', 'could', 'will', 'would',
+      'shall', 'should', 'how', 'much', 'many', 'what', 'where', 'when', 'who', 'why', 'bro', 'guys',
+      'guy', 'dear', 'sir', 'ma', 'okay', 'ok', 'yes', 'no', 'hi', 'hello', 'hey', 'good', 'morning',
+      'afternoon', 'evening', 'night', 'today', 'now', 'right', 'there', 'here', 'just', 'still', 'dey',
+      'abeg', 'pls', 'send', 'tell', 'show', 'give', 'hope', 'fine', 'call', 'see', 'around'
+    ]);
+
+    const keywords = cleanQuery
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3 && !stopWords.has(w));
+
+    // If query contains only stop words / conversational terms, do not attempt fuzzy matching
+    if (keywords.length === 0 && !cleanQuery.includes('board') && !cleanQuery.includes('sprayer') && !cleanQuery.includes('mop')) {
+      return [];
+    }
+
     if (supabaseInstance) {
+      // 1. Direct match on clean query
       const { data, error } = await supabaseInstance
         .from('products')
         .select('*, variants:product_variants(*)')
-        .or(`name.ilike.%${cleanQuery}%,description.ilike.%${cleanQuery}%,category_name.ilike.%${cleanQuery}%`)
+        .or(`name.ilike.%${cleanQuery}%,description.ilike.%${cleanQuery}%`)
         .limit(10);
       if (!error && data && data.length > 0) return data as Product[];
+
+      // 2. Keyword match if significant keywords exist
+      if (keywords.length > 0) {
+        const orConditions = keywords.map((kw) => `name.ilike.%${kw}%`).join(',');
+        const { data: kwData, error: kwError } = await supabaseInstance
+          .from('products')
+          .select('*, variants:product_variants(*)')
+          .or(orConditions)
+          .limit(10);
+        if (!kwError && kwData && kwData.length > 0) return kwData as Product[];
+      }
     }
 
-    // In-memory smart search: filter out common stop words
-    const stopWords = new Set(['i', 'want', 'need', 'to', 'buy', 'get', 'a', 'an', 'the', 'is', 'for', 'in', 'of', 'and', 'or', 'please', 'me']);
-    const keywords = cleanQuery
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length >= 2 && !stopWords.has(w));
-
+    // In-memory fallback
     const scored = MOCK_PRODUCTS.map((p) => {
       const nameLower = p.name.toLowerCase();
-      const descLower = p.description.toLowerCase();
-      const catLower = p.category_name.toLowerCase();
-      const tagsLower = (p.tags || []).join(' ').toLowerCase();
+      const tagsLower = (p.tags || []).map((t) => t.toLowerCase());
 
       let score = 0;
       // Exact substring match gives high priority
       if (nameLower.includes(cleanQuery)) score += 50;
-      if (catLower.includes(cleanQuery)) score += 30;
+      if (tagsLower.some((t) => t.includes(cleanQuery) || cleanQuery.includes(t))) score += 40;
 
-      // Score per matching keyword
+      // Score per matching keyword with word boundary regex (no random substring matches)
       for (const kw of keywords) {
-        if (nameLower.includes(kw)) score += 15;
-        if (tagsLower.includes(kw)) score += 10;
-        if (descLower.includes(kw)) score += 5;
-        if (catLower.includes(kw)) score += 8;
+        const regex = new RegExp(`\\b${kw}`, 'i');
+        if (regex.test(nameLower)) score += 20;
+        if (tagsLower.some((t) => regex.test(t))) score += 15;
       }
 
       return { product: p, score };
     });
 
+    // Require minimum threshold score to avoid false positives on casual words
     return scored
-      .filter((s) => s.score > 0)
+      .filter((s) => s.score >= 20)
       .sort((a, b) => b.score - a.score)
       .map((s) => ({
         ...s.product,
@@ -372,6 +398,8 @@ export const db = {
       bank_name: config.BANK_NAME,
       account_number: config.BANK_ACCOUNT_NUMBER,
       account_name: config.BANK_ACCOUNT_NAME,
+      is_bot_active: false, // Default PAUSED as requested by merchant!
+      trigger_mode: 'KEYWORD_ONLY',
     };
 
     if (supabaseInstance) {
@@ -387,6 +415,8 @@ export const db = {
             result.store_name = row.value.store_name || result.store_name;
             result.support_phone = row.value.support_phone || result.support_phone;
             result.whatsapp_group_link = row.value.whatsapp_group_link || result.whatsapp_group_link;
+            if (row.value.is_bot_active !== undefined) result.is_bot_active = row.value.is_bot_active;
+            if (row.value.trigger_mode !== undefined) result.trigger_mode = row.value.trigger_mode;
           } else {
             result[row.key] = row.value;
           }
@@ -412,12 +442,15 @@ export const db = {
         });
       }
 
+      const current = await this.getStoreSettings();
       await supabaseInstance.from('store_settings').upsert({
         key: 'store_info',
         value: {
-          store_name: settings.store_name || config.STORE_NAME,
-          support_phone: settings.support_phone || config.SUPPORT_PHONE_NUMBER,
-          whatsapp_group_link: settings.whatsapp_group_link || '',
+          store_name: settings.store_name || current.store_name,
+          support_phone: settings.support_phone || current.support_phone,
+          whatsapp_group_link: settings.whatsapp_group_link !== undefined ? settings.whatsapp_group_link : current.whatsapp_group_link,
+          is_bot_active: settings.is_bot_active !== undefined ? settings.is_bot_active : current.is_bot_active,
+          trigger_mode: settings.trigger_mode || current.trigger_mode,
         },
         updated_at: new Date().toISOString(),
       });

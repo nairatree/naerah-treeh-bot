@@ -30,7 +30,44 @@ describe('Nairatee Stores E-Commerce Chatbot Engine Tests', () => {
     assert.ok(parsed.address.includes('Admiralty Way'), 'Should extract full street address');
   });
 
-  test('3. Chat Flow: Inbound Query -> Variant Selection -> Payment Method -> Order Placement', async () => {
+  test('3. Master Killswitch: Silently Drops Messages When Paused', async () => {
+    await db.updateStoreSettings({ is_bot_active: false });
+    const testPhone = '2348055443322';
+    chatSessionManager.resetSession(testPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: testPhone,
+      text: 'I want to buy chopping board',
+    });
+
+    const session = chatSessionManager.getSession(testPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session must remain IDLE when bot is paused');
+  });
+
+  test('4. Anti-Interference Filter: Casual Messages Ignored, Store Inquiries Processed', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const casualPhone = '2348077665544';
+    chatSessionManager.resetSession(casualPhone);
+
+    // Casual messages from friends or family
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: casualPhone,
+      text: 'Bro, where are you guys right now?',
+    });
+
+    let session = chatSessionManager.getSession(casualPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Casual chat must be ignored and stay IDLE');
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: casualPhone,
+      text: 'Good morning, hope the kids are fine?',
+    });
+    session = chatSessionManager.getSession(casualPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Casual greeting must not trigger bot flow');
+  });
+
+  test('5. Chat Flow: Inbound Query -> Variant Selection -> Payment Method -> Order Placement', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
     const testPhone = '2348099887766';
     chatSessionManager.resetSession(testPhone);
 
@@ -79,9 +116,12 @@ describe('Nairatee Stores E-Commerce Chatbot Engine Tests', () => {
     assert.ok(createdOrder, 'Order must be saved in database');
     assert.strictEqual(createdOrder.payment_method, 'POD');
     assert.strictEqual(createdOrder.items[0].product_name, 'Heavy-Duty 2-in-1 Knapsack Sprayer');
+
+    // Clean up: restore bot to PAUSED as requested by merchant!
+    await db.updateStoreSettings({ is_bot_active: false });
   });
 
-  test('4. Bulk CSV Catalog Import with Variants Generator', async () => {
+  test('6. Bulk CSV Catalog Import with Variants Generator', async () => {
     const sampleCSV = `Category,Name,Price,Sizes,Colors,Description,Image_URL
 Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Black, Crimson Red","Granite coating pan with induction base",https://example.com/pan.jpg`;
 

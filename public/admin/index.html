@@ -361,6 +361,17 @@
       </div>
     </div>
 
+    <!-- MASTER BOT KILLSWITCH IN HEADER -->
+    <div style="display: flex; align-items: center; gap: 12px; background: #0f172a; padding: 6px 14px; border-radius: 12px; border: 1px solid var(--card-border);">
+      <div id="bot-status-indicator" style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;">
+        <span id="bot-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444; display: inline-block;"></span>
+        <span id="bot-status-text" style="color: #f87171;">BOT PAUSED</span>
+      </div>
+      <button id="bot-toggle-btn" class="btn" onclick="toggleBotMasterStatus()" style="padding: 6px 14px; font-size: 12px; font-weight: 700; background: #059669; color: white;">
+        ▶️ Turn Bot ON
+      </button>
+    </div>
+
     <div class="header-actions">
       <nav class="nav-tabs">
         <button class="nav-tab active" onclick="switchTab('orders')">📦 Orders</button>
@@ -493,6 +504,26 @@
 
     <!-- TAB 5: SETTINGS -->
     <div id="tab-settings" class="tab-content">
+      <!-- MASTER KILLSWITCH & PRIVACY CARD -->
+      <div class="card" style="border-left: 4px solid #38bdf8; margin-bottom: 24px;">
+        <div class="card-title" style="margin-bottom: 6px;">🤖 WhatsApp Bot Master Switch & Anti-Interference Controls</div>
+        <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">
+          Easily turn the chatbot ON or OFF with one click. When turned OFF, incoming messages will receive zero automated responses.
+        </p>
+        <div style="display: flex; align-items: center; justify-content: space-between; background: #0f172a; padding: 16px 20px; border-radius: 12px; border: 1px solid var(--card-border); margin-bottom: 16px;">
+          <div>
+            <div id="settings-bot-status-badge" style="font-size: 15px; font-weight: 700; color: #f87171;">🔴 Bot is Currently PAUSED (OFF)</div>
+            <div id="settings-bot-desc" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">The bot is silent. It will not reply to any WhatsApp messages.</div>
+          </div>
+          <button id="settings-bot-toggle" type="button" class="btn" onclick="toggleBotMasterStatus()" style="background: #059669; color: white; padding: 8px 18px; font-weight: 700;">
+            ▶️ Turn Bot ON
+          </button>
+        </div>
+        <div style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.25); padding: 12px 16px; border-radius: 8px; font-size: 13px; color: #bae6fd; line-height: 1.5;">
+          🛡️ <strong>Built-in Anti-Interference Shield:</strong> When the bot is turned ON, it only triggers on catalog products (e.g. chopping board, sprayer, mop) and explicit shopping queries (order, price, buy, how much, catalog, support). Casual conversations from family, friends, or suppliers (e.g. "where are you", "bro call me", "how are the kids") are <strong>100% ignored</strong> so you can chat freely!
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <div class="card-title">⚙️ Store & WhatsApp Settings</div>
@@ -833,12 +864,66 @@
       }
     }
 
+    // Bot Master Killswitch State & UI
+    let isBotActive = false;
+
+    function updateBotUI(active) {
+      isBotActive = active;
+      const dot = document.getElementById('bot-status-dot');
+      const text = document.getElementById('bot-status-text');
+      const btn = document.getElementById('bot-toggle-btn');
+
+      const sBadge = document.getElementById('settings-bot-status-badge');
+      const sDesc = document.getElementById('settings-bot-desc');
+      const sBtn = document.getElementById('settings-bot-toggle');
+
+      if (active) {
+        if (dot) dot.style.background = '#10b981';
+        if (text) { text.innerText = 'BOT ACTIVE (Smart Shield)'; text.style.color = '#34d399'; }
+        if (btn) {
+          btn.innerText = '⏸️ Turn Bot OFF';
+          btn.style.background = '#dc2626';
+          btn.title = 'Click to immediately pause the bot and ignore all incoming messages';
+        }
+        if (sBadge) { sBadge.innerText = '🟢 Bot is LIVE & ACTIVE'; sBadge.style.color = '#34d399'; }
+        if (sDesc) sDesc.innerText = 'The bot is responding to customer orders & product inquiries with smart anti-interference active.';
+        if (sBtn) { sBtn.innerText = '⏸️ Turn Bot OFF'; sBtn.style.background = '#dc2626'; }
+      } else {
+        if (dot) dot.style.background = '#ef4444';
+        if (text) { text.innerText = 'BOT PAUSED'; text.style.color = '#f87171'; }
+        if (btn) {
+          btn.innerText = '▶️ Turn Bot ON';
+          btn.style.background = '#059669';
+          btn.title = 'Click to activate the bot for customer orders';
+        }
+        if (sBadge) { sBadge.innerText = '🔴 Bot is Currently PAUSED (OFF)'; sBadge.style.color = '#f87171'; }
+        if (sDesc) sDesc.innerText = 'The bot is 100% silent. It will not reply to any incoming WhatsApp messages.';
+        if (sBtn) { sBtn.innerText = '▶️ Turn Bot ON'; sBtn.style.background = '#059669'; }
+      }
+    }
+
+    async function toggleBotMasterStatus() {
+      const targetState = !isBotActive;
+      try {
+        const res = await fetch('/api/admin/toggle-bot', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ is_bot_active: targetState })
+        });
+        const data = await res.json();
+        updateBotUI(!!data.is_bot_active);
+      } catch (err) {
+        alert('Failed to update bot status: ' + err.message);
+      }
+    }
+
     // Settings
     async function loadSettings() {
       try {
         const res = await fetch('/api/admin/settings', { headers: authHeaders() });
         const data = await res.json();
         if (data) {
+          updateBotUI(!!data.is_bot_active);
           document.getElementById('set-group-link').value = data.whatsapp_group_link || '';
           document.getElementById('set-support-phone').value = data.support_phone || '';
           document.getElementById('set-store-name').value = data.store_name || '';
