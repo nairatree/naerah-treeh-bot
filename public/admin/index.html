@@ -367,6 +367,7 @@
         <button class="nav-tab" onclick="switchTab('products')">🏷️ Products & Variants</button>
         <button class="nav-tab" onclick="switchTab('bulk')">📥 Bulk CSV Import</button>
         <button class="nav-tab" onclick="switchTab('simulator')">💬 Bot Simulator</button>
+        <button class="nav-tab" onclick="switchTab('settings')">⚙️ Settings</button>
       </nav>
       <button class="btn btn-secondary" onclick="logout()" style="padding: 6px 12px; font-size: 12px;">🔒 Logout</button>
     </div>
@@ -487,6 +488,50 @@
             <button class="btn btn-primary" onclick="sendSimMessage()">Send</button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: SETTINGS -->
+    <div id="tab-settings" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">⚙️ Store & WhatsApp Settings</div>
+          <span style="font-size: 13px; color: var(--text-muted);">Changes take effect on WhatsApp immediately!</span>
+        </div>
+        <form onsubmit="handleSaveSettings(event)">
+          <div class="form-group">
+            <label class="form-label">WhatsApp Community / Group Invite Link</label>
+            <input type="url" id="set-group-link" class="form-input" placeholder="https://chat.whatsapp.com/...">
+            <small style="color: var(--text-muted); font-size: 12px; display: block; margin-top: 4px;">The bot will send this link in the welcome menu and order confirmations so shoppers join your group.</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Dedicated Support Alert WhatsApp Phone Number</label>
+            <input type="text" id="set-support-phone" class="form-input" placeholder="e.g. 2348012345678">
+            <small style="color: var(--text-muted); font-size: 12px; display: block; margin-top: 4px;">The staff phone number that will receive instant alerts when a customer clicks 'Talk to Support'.</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Store Brand Name</label>
+            <input type="text" id="set-store-name" class="form-input" placeholder="Naerah Treeh Stores">
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+            <div class="form-group">
+              <label class="form-label">Bank Name</label>
+              <input type="text" id="set-bank-name" class="form-input" placeholder="MONIEPOINT MFB">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Account Number</label>
+              <input type="text" id="set-acc-number" class="form-input" placeholder="9047125385">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Account Name</label>
+              <input type="text" id="set-acc-name" class="form-input" placeholder="NAERAH TREEH BUSINESS VENTURES">
+            </div>
+          </div>
+          <div style="margin-top: 20px;">
+            <button type="submit" class="btn btn-primary">💾 Save Settings</button>
+            <span id="save-settings-result" style="margin-left: 12px; font-weight: 600;"></span>
+          </div>
+        </form>
       </div>
     </div>
   </main>
@@ -788,11 +833,65 @@
       }
     }
 
+    // Settings
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/admin/settings', { headers: authHeaders() });
+        const data = await res.json();
+        if (data) {
+          document.getElementById('set-group-link').value = data.whatsapp_group_link || '';
+          document.getElementById('set-support-phone').value = data.support_phone || '';
+          document.getElementById('set-store-name').value = data.store_name || '';
+          document.getElementById('set-bank-name').value = data.bank_name || '';
+          document.getElementById('set-acc-number').value = data.account_number || '';
+          document.getElementById('set-acc-name').value = data.account_name || '';
+        }
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+      }
+    }
+
+    async function handleSaveSettings(e) {
+      e.preventDefault();
+      const groupLink = document.getElementById('set-group-link').value.trim();
+      const supportPhone = document.getElementById('set-support-phone').value.trim();
+      const storeName = document.getElementById('set-store-name').value.trim();
+      const bankName = document.getElementById('set-bank-name').value.trim();
+      const accNumber = document.getElementById('set-acc-number').value.trim();
+      const accName = document.getElementById('set-acc-name').value.trim();
+
+      const resultSpan = document.getElementById('save-settings-result');
+      resultSpan.style.color = '#38bdf8';
+      resultSpan.innerText = 'Saving...';
+
+      try {
+        await fetch('/api/admin/settings', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            whatsapp_group_link: groupLink,
+            support_phone: supportPhone,
+            store_name: storeName,
+            bank_name: bankName,
+            account_number: accNumber,
+            account_name: accName
+          })
+        });
+        resultSpan.style.color = '#34d399';
+        resultSpan.innerText = '✅ Settings saved! Group link & Support phone updated across all bot chats.';
+        setTimeout(() => { resultSpan.innerText = ''; }, 4000);
+      } catch (err) {
+        resultSpan.style.color = '#ef4444';
+        resultSpan.innerText = '❌ Failed to save settings';
+      }
+    }
+
     // Initial load
     checkAuth();
     loadStats();
     fetchOrders();
     fetchProducts();
+    loadSettings();
   </script>
 </body>
 </html>

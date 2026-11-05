@@ -16,4 +16,7 @@ adminRouter.post('/products/bulk', adminController.bulkImport);
 adminRouter.get('/orders', adminController.getOrders);
 adminRouter.patch('/orders/:id/status', adminController.updateOrderStatus);
 
+adminRouter.get('/settings', adminController.getSettings);
+adminRouter.post('/settings', adminController.updateSettings);
+
 adminRouter.post('/simulate', adminController.simulateMessage);

@@ -363,4 +363,66 @@ export const db = {
     }
     return false;
   },
+
+  async getStoreSettings(): Promise<Record<string, any>> {
+    const defaults = {
+      store_name: config.STORE_NAME,
+      support_phone: config.SUPPORT_PHONE_NUMBER,
+      whatsapp_group_link: '',
+      bank_name: config.BANK_NAME,
+      account_number: config.BANK_ACCOUNT_NUMBER,
+      account_name: config.BANK_ACCOUNT_NAME,
+    };
+
+    if (supabaseInstance) {
+      const { data, error } = await supabaseInstance.from('store_settings').select('*');
+      if (!error && data) {
+        const result: Record<string, any> = { ...defaults };
+        data.forEach((row) => {
+          if (row.key === 'bank_details' && typeof row.value === 'object') {
+            result.bank_name = row.value.bank_name || result.bank_name;
+            result.account_number = row.value.account_number || result.account_number;
+            result.account_name = row.value.account_name || result.account_name;
+          } else if (row.key === 'store_info' && typeof row.value === 'object') {
+            result.store_name = row.value.store_name || result.store_name;
+            result.support_phone = row.value.support_phone || result.support_phone;
+            result.whatsapp_group_link = row.value.whatsapp_group_link || result.whatsapp_group_link;
+          } else {
+            result[row.key] = row.value;
+          }
+        });
+        return result;
+      }
+    }
+
+    return defaults;
+  },
+
+  async updateStoreSettings(settings: Record<string, any>): Promise<boolean> {
+    if (supabaseInstance) {
+      if (settings.bank_name || settings.account_number || settings.account_name) {
+        await supabaseInstance.from('store_settings').upsert({
+          key: 'bank_details',
+          value: {
+            bank_name: settings.bank_name || config.BANK_NAME,
+            account_number: settings.account_number || config.BANK_ACCOUNT_NUMBER,
+            account_name: settings.account_name || config.BANK_ACCOUNT_NAME,
+          },
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      await supabaseInstance.from('store_settings').upsert({
+        key: 'store_info',
+        value: {
+          store_name: settings.store_name || config.STORE_NAME,
+          support_phone: settings.support_phone || config.SUPPORT_PHONE_NUMBER,
+          whatsapp_group_link: settings.whatsapp_group_link || '',
+        },
+        updated_at: new Date().toISOString(),
+      });
+      return true;
+    }
+    return true;
+  },
 };

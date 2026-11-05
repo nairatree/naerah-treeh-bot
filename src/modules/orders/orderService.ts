@@ -88,7 +88,7 @@ export class OrderService {
     return order;
   }
 
-  formatOrderConfirmation(order: Order): string {
+  formatOrderConfirmation(order: Order, groupLink?: string): string {
     const formattedTotal = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(order.total_amount);
     const item = order.items[0];
     const itemDetails = item ? `${item.product_name} ${[item.color, item.size].filter(Boolean).join(' / ')}` : 'Products';
@@ -113,6 +113,10 @@ export class OrderService {
 
     msg += `📞 Our team will contact you on *${order.customer_phone}* before dispatch.\n`;
     msg += `Thank you for shopping with *${config.STORE_NAME}*! 🌟`;
+
+    if (groupLink) {
+      msg += `\n\n📲 *Join our VIP WhatsApp Community for Daily New Arrivals & Discounts:*\n${groupLink}`;
+    }
 
     return msg;
   }

@@ -113,8 +113,8 @@ export class ChatFlowEngine {
    * Welcome Menu & Introduction
    */
   async sendWelcomeMenu(phoneNumber: string): Promise<void> {
-    const categories = await catalogService.getCategories();
-    let msg = `👋 *Welcome to ${config.STORE_NAME}!* 🛍️\n\n`;
+    const [categories, settings] = await Promise.all([catalogService.getCategories(), db.getStoreSettings()]);
+    let msg = `👋 *Welcome to ${settings.store_name || config.STORE_NAME}!* 🛍️\n\n`;
     msg += `We deliver high-quality products directly to your doorstep across Nigeria.\n\n`;
     msg += `📂 *POPULAR CATEGORIES:*\n`;
 
@@ -129,6 +129,10 @@ export class ChatFlowEngine {
     msg += `👉 *"Spin Mop"*\n\n`;
     msg += `_Or type *SUPPORT* to speak with our team._`;
 
+    if (settings.whatsapp_group_link) {
+      msg += `\n\n📲 *Join our VIP WhatsApp Catalog Group:*\n${settings.whatsapp_group_link}\n_(New arrivals & wholesale prices posted daily!)_`;
+    }
+
     await botsailorClient.sendTextMessage(phoneNumber, msg);
   }
 
@@ -141,7 +145,7 @@ export class ChatFlowEngine {
       return;
     }
 
-    const results = await catalogService.search(query);
+    const [results, settings] = await Promise.all([catalogService.search(query), db.getStoreSettings()]);
 
     if (results.length === 0) {
       let msg = `😕 Sorry, we couldn't find an exact match for *"${query}"*.\n\n`;
@@ -150,6 +154,11 @@ export class ChatFlowEngine {
       msg += `2️⃣ *Agricultural Tools*\n`;
       msg += `3️⃣ *Home & Cleaning*\n\n`;
       msg += `_Or reply *SUPPORT* to have our representative check stock for you!_`;
+
+      if (settings.whatsapp_group_link) {
+        msg += `\n\n📲 *Join our WhatsApp Group to browse 500+ items:*\n${settings.whatsapp_group_link}`;
+      }
+
       await botsailorClient.sendTextMessage(phoneNumber, msg);
       return;
     }
@@ -341,7 +350,8 @@ export class ChatFlowEngine {
       chatSessionManager.setState(phoneNumber, 'IDLE');
     }
 
-    const confirmationMsg = orderService.formatOrderConfirmation(order);
+    const settings = await db.getStoreSettings();
+    const confirmationMsg = orderService.formatOrderConfirmation(order, settings.whatsapp_group_link);
     await botsailorClient.sendTextMessage(phoneNumber, confirmationMsg);
   }
 
@@ -423,8 +433,10 @@ export class ChatFlowEngine {
    */
   async notifySupportTeam(customerPhone: string, session: any): Promise<void> {
     try {
-      const supportPhone = config.SUPPORT_PHONE_NUMBER.replace(/\D/g, '');
+      const settings = await db.getStoreSettings();
+      const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
       if (!supportPhone || supportPhone === '2348000000000') {
+        logger.warn('Support alert not sent: No valid support phone configured in store settings yet.');
         return;
       }
 

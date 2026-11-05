@@ -145,4 +145,23 @@ export const adminController = {
       res.status(500).json({ error: err.message || 'Simulation error' });
     }
   },
+
+  async getSettings(req: Request, res: Response): Promise<void> {
+    try {
+      const settings = await db.getStoreSettings();
+      res.json(settings);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+  },
+
+  async updateSettings(req: Request, res: Response): Promise<void> {
+    try {
+      await db.updateStoreSettings(req.body);
+      const updated = await db.getStoreSettings();
+      res.json({ status: 'success', settings: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to update settings' });
+    }
+  },
 };
