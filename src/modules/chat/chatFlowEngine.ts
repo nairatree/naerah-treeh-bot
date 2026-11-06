@@ -46,20 +46,30 @@ export class ChatFlowEngine {
 
     const session = chatSessionManager.getSession(cleanPhone);
 
-    // 2. Check for Delivery & Order Status Inquiries (Hybrid Model - Post-Purchase Assistance)
-    if (orderService.isDeliveryInquiry(cleanText)) {
+    // 2. Check for Delivery & Post-Purchase Order Inquiries (Hybrid Model - Post-Purchase Assistance)
+    if (orderService.isPostPurchaseOrSupportInquiry(cleanText)) {
       const order = await orderService.findCustomerOrder(cleanPhone, cleanText);
       chatSessionManager.handoverToSupport(cleanPhone);
 
       if (order) {
         const statusMsg = orderService.formatOrderStatus(order);
-        await botsailorClient.sendTextMessage(cleanPhone, statusMsg);
+        await botsailorClient.sendQuickReplyButtons(
+          cleanPhone,
+          statusMsg,
+          [{ text: '📂 MENU', payload: 'menu' }],
+          'Order Status'
+        );
       } else {
-        let msg = `📦 *Order & Delivery Inquiry*\n\n`;
-        msg += `We couldn't immediately locate an active order for this WhatsApp number in our records.\n\n`;
-        msg += `One of our *staff* has been notified and will check with dispatch to assist you directly!\n\n`;
-        msg += `👉 If you have your Order Ref (e.g. *NT-2026-XXXX*), please reply with it so we can track it immediately.`;
-        await botsailorClient.sendTextMessage(cleanPhone, msg);
+        let msg = `👩‍💼 *Customer Support Assigned*\n\n`;
+        msg += `We see you are contacting us regarding an existing order, delivery, or support inquiry (*"${cleanText}"*).\n\n`;
+        msg += `One of our *staff* has been notified right away and will assist you here shortly!\n\n`;
+        msg += `_(Type *MENU* anytime to return to the catalog)._`;
+        await botsailorClient.sendQuickReplyButtons(
+          cleanPhone,
+          msg,
+          [{ text: '📂 MENU', payload: 'menu' }],
+          'Customer Support'
+        );
       }
 
       // Non-blocking staff alert for instant customer response
@@ -68,7 +78,7 @@ export class ChatFlowEngine {
         inquiryText: cleanText,
         order,
       }).catch((err) =>
-        logger.error('Failed to notify staff of delivery inquiry in background:', err.message)
+        logger.error('Failed to notify staff of delivery/support inquiry in background:', err.message)
       );
       return;
     }
@@ -248,6 +258,17 @@ export class ChatFlowEngine {
       sessionContext.awaitingProductSearch = false;
     }
 
+    const words = cleanText.trim().split(/\s+/).filter(Boolean);
+    const isShortQuery = words.length <= 3;
+    const hasBuyingIntent = this.hasExplicitBuyingIntent(cleanText);
+
+    // Gate: Messages with more than 3 words MUST have explicit buying intent,
+    // unless the customer was actively prompted for a product name via the "Enter Product Name" button
+    if (!wasAwaitingSearch && !isShortQuery && !hasBuyingIntent) {
+      logger.info(`[ANTI-INTERFERENCE] Ignoring non-buying conversational message from ${phoneNumber}: "${cleanText}"`);
+      return;
+    }
+
     // Attempt catalog search
     const results = await catalogService.search(cleanText);
 
@@ -306,18 +327,11 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 3. No Product Found: Check for Shopping / Product Search Intent
-    const shoppingIntentKeywords = [
-      'order', 'buy', 'price', 'cost', 'how much', 'do you have', 'stock',
-      'deliver', 'delivery', 'sell', 'discount', 'purchase', 'shipping',
-      'available', 'pay on delivery', 'payment', 'transfer', 'wholesale', 'catalog', 'item',
-      'product', 'need', 'want', 'i want', 'get', 'looking for', 'search', 'goods', 'spray', 'sprayer', 'board', 'mop'
-    ];
-    const hasShoppingIntent = shoppingIntentKeywords.some((k) => lowerText.includes(k));
+    // 3. No Product Found: Check if inquiry was an intentional product search
     const isCasual = this.isCasualNonStoreMessage(cleanText);
 
-    // If customer was explicitly prompted for product name, or typed shopping keywords, or entered a non-casual item search:
-    if (wasAwaitingSearch || hasShoppingIntent || (!isCasual && cleanText.length >= 3 && cleanText.length <= 60)) {
+    // If customer was explicitly prompted for product name, or typed buying keywords, or entered a non-casual item search:
+    if (wasAwaitingSearch || hasBuyingIntent || (!isCasual && isShortQuery)) {
       let unavailableMsg = `😕 *Product Currently Unavailable*\n\n`;
       unavailableMsg += `Sorry, we couldn't find an exact match for *"${cleanText}"* in our current stock right now.\n\n`;
       unavailableMsg += `👉 You can speak with our *staff*, join our *VIP WhatsApp Group* to see our available items & daily restocks, or view our main menu.`;
@@ -726,7 +740,9 @@ export class ChatFlowEngine {
       const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
       if (!supportPhone || supportPhone === '2348000000000') return;
 
-      let alert = `🚚 *CUSTOMER CHECKING DELIVERY STATUS!* 🚚\n\n`;
+      let alert = params.order
+        ? `🚚 *CUSTOMER CHECKING DELIVERY / ORDER STATUS!* 🚚\n\n`
+        : `🚨 *POST-PURCHASE / CUSTOMER SUPPORT ALERT!* 🚨\n\n`;
       alert += `• *Customer Phone:* +${params.customerPhone}\n`;
       if (params.order) {
         alert += `• *Order Ref:* ${params.order.order_number}\n`;
@@ -734,13 +750,13 @@ export class ChatFlowEngine {
         alert += `• *Order Status:* ${params.order.order_status}\n`;
         alert += `• *Delivery Address:* ${params.order.delivery_address}\n`;
       } else {
-        alert += `• *Order Ref:* Not found by phone number\n`;
+        alert += `• *Inquiry Type:* Past Order Follow-up / Complaint\n`;
       }
-      alert += `• *Customer Inquiry:* "${params.inquiryText}"\n\n`;
+      alert += `• *Customer Message:* "${params.inquiryText}"\n\n`;
       alert += `👉 *Tap to chat with customer right now:* https://wa.me/${params.customerPhone}`;
 
       await botsailorClient.sendTextMessage(supportPhone, alert);
-      logger.info(`Dispatched delivery inquiry alert to staff (${supportPhone}) for customer (+${params.customerPhone})`);
+      logger.info(`Dispatched delivery/support alert to staff (${supportPhone}) for customer (+${params.customerPhone})`);
     } catch (err: any) {
       logger.error('Failed to dispatch delivery inquiry alert to staff WhatsApp:', err.message);
     }
@@ -796,6 +812,19 @@ export class ChatFlowEngine {
       /\b(good\s+morning|good\s+afternoon|good\s+evening|good\s+day)\b/i,
     ];
     return casualPatterns.some((pattern) => pattern.test(clean));
+  }
+
+  /**
+   * Checks whether a natural text message expresses clear purchase/buying intent
+   * (e.g. "how much is", "i want to buy", "do you have", "price of")
+   */
+  hasExplicitBuyingIntent(text: string): boolean {
+    const lower = text.toLowerCase();
+    const buyingPatterns = [
+      /\b(buy|order|price|cost|how\s+much|do\s+you\s+have|have\s+you|i\s+want|want\s+to|need|available|in\s+stock|looking\s+for|deliver\s+to|interested\s+in|purchase|get\s+one|get\s+this|pay\s+on\s+delivery)\b/i,
+      /\b(how\s+much\s+is|cost\s+of|rate\s+of|give\s+me|send\s+me|send\s+price)\b/i,
+    ];
+    return buyingPatterns.some((pattern) => pattern.test(lower));
   }
 }
 

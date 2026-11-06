@@ -389,4 +389,85 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     // Ensure bot stays in paused state
     await db.updateStoreSettings({ is_bot_active: false });
   });
+
+  test('11. Solution 1: Past-Tense & Complaint Gate Intercepts "I ordered for a plate last week"', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const pastBuyerPhone = '2348022334455';
+    chatSessionManager.resetSession(pastBuyerPhone);
+
+    // Scenario 1: Customer mentions past order ("Oh, I ordered for a plate last week")
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: pastBuyerPhone,
+      text: 'Oh, I ordered for a plate last week',
+    });
+
+    let session = chatSessionManager.getSession(pastBuyerPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Must intercept past order and handover to staff');
+    assert.strictEqual(session.context.currentProduct, undefined, 'Must NOT trigger product selling flow');
+
+    // Scenario 2: Complaint about damaged goods ("My plate arrived broken yesterday")
+    const complaintPhone = '2348022334466';
+    chatSessionManager.resetSession(complaintPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: complaintPhone,
+      text: 'My plate arrived broken yesterday',
+    });
+
+    session = chatSessionManager.getSession(complaintPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Must intercept complaint and handover to staff');
+
+    // Scenario 3: Payment follow-up ("I paid for the plate this morning")
+    const paidPhone = '2348022334477';
+    chatSessionManager.resetSession(paidPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: paidPhone,
+      text: 'I paid for the plate this morning',
+    });
+
+    session = chatSessionManager.getSession(paidPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Must intercept payment follow-up and handover to staff');
+
+    await db.updateStoreSettings({ is_bot_active: false });
+  });
+
+  test('12. Solution 1: Conversational Long-Sentence Gate vs Explicit Buying Intent', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const shopperPhone = '2348033445566';
+    chatSessionManager.resetSession(shopperPhone);
+
+    // Conversational chatter with product noun but NO buying intent (> 3 words)
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone,
+      text: 'My friend was talking about chopping boards at work',
+    });
+
+    let session = chatSessionManager.getSession(shopperPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Must stay IDLE and NOT show product when no buying intent exists');
+
+    // Explicit buying intent in longer sentence ("How much is the chopping board?")
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone,
+      text: 'How much is the chopping board?',
+    });
+
+    session = chatSessionManager.getSession(shopperPhone);
+    assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Must show product when buying intent is present');
+    assert.ok(session.context.currentProduct, 'Product must be matched');
+
+    // Short query (<= 3 words, e.g. "Chopping board")
+    const directPhone = '2348033445577';
+    chatSessionManager.resetSession(directPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: directPhone,
+      text: 'Chopping board',
+    });
+
+    session = chatSessionManager.getSession(directPhone);
+    assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Direct short query must trigger product presentation');
+
+    await db.updateStoreSettings({ is_bot_active: false });
+  });
 });

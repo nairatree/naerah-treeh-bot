@@ -120,12 +120,13 @@ export class OrderService {
   }
 
   /**
-   * Check if inbound message is inquiring about an existing order, package or delivery
+   * Check if inbound message is inquiring about an existing order, past purchase, delivery, or complaint
+   * Intercepts messages like "Oh, I ordered for a plate last week", "Where is the plate I bought?", "My plate arrived broken"
    */
-  isDeliveryInquiry(text: string): boolean {
+  isPostPurchaseOrSupportInquiry(text: string): boolean {
     const lower = text.toLowerCase().trim();
 
-    // 1. Explicit Order Ref detection
+    // 1. Explicit Order Ref detection (e.g. NT-2026-1001)
     if (/NT-\d{4}-\d+/i.test(lower)) {
       return true;
     }
@@ -143,6 +144,9 @@ export class OrderService {
       'where is my delivery',
       'where is my product',
       'where is my package',
+      'where is the plate',
+      'where is the product',
+      'where is the order',
       'when will my order',
       'when will my product',
       'when will you deliver',
@@ -167,7 +171,42 @@ export class OrderService {
       return true;
     }
 
-    // 3. Subject + Inquiry Combination (e.g. "when will you do the delivery", "what is happening with my order")
+    // 3. Past-Tense Actions on Orders & Purchases
+    // e.g. "I ordered for a plate last week", "I bought a sprayer from you", "I paid for this mop"
+    const hasPastAction = /\b(ordered|bought|purchased|already\s+ordered|already\s+bought|already\s+paid|paid\s+for|i\s+paid|we\s+paid|sent\s+money|transferred\s+money)\b/i.test(lower);
+    const hasPastTimeframe = /\b(last\s+week|yesterday|since|few\s+days\s+ago|days\s+ago|last\s+month|earlier|this\s+morning|already)\b/i.test(lower);
+    const hasPastDelivery = /\b(received|got\s+my|collected|delivered|sent\s+me|sent\s+to\s+me|arrived)\b/i.test(lower);
+
+    // If customer mentions a past action with timeframe or on its own
+    if (hasPastAction && (hasPastTimeframe || /\b(for\s+a|the|my|one)\b/i.test(lower))) {
+      return true;
+    }
+    if (hasPastAction && hasPastTimeframe) {
+      return true;
+    }
+    // "I ordered..." or "I bought..." or "I paid for..."
+    if (/\b(i|we)\s+(ordered|bought|paid\s+for|purchased)\b/i.test(lower)) {
+      return true;
+    }
+
+    // 4. Past Delivery + Complaint or Timeframe (e.g. "My plate arrived broken", "You sent me the wrong color")
+    if (hasPastDelivery && (hasPastTimeframe || /\b(broken|crack|cracked|damage|damaged|wrong|faulty|issue|problem|defect|bad|leak|scratch|scratched)\b/i.test(lower))) {
+      return true;
+    }
+
+    // 5. Complaints, Defects, Refunds, Returns & Missing Items
+    const hasComplaint = /\b(broken|damage|damaged|cracked|faulty|not\s+working|spoilt|spoiled|wrong\s+item|wrong\s+color|wrong\s+size|wrong\s+product|refund|return|replacement|replace|send\s+it\s+back|missing|incomplete)\b/i.test(lower);
+    if (hasComplaint) {
+      return true;
+    }
+
+    // 6. "Haven't seen" / "Haven't received" / "Not yet received"
+    const hasNotReceived = /\b(haven't\s+seen|havent\s+seen|not\s+seen|haven't\s+received|havent\s+received|not\s+received|yet\s+to\s+see|yet\s+to\s+receive|waiting\s+for\s+my)\b/i.test(lower);
+    if (hasNotReceived) {
+      return true;
+    }
+
+    // 7. Subject + Inquiry Combination (e.g. "when will you do the delivery", "what is happening with my order")
     const hasSubject = /\b(delivery|order|package|dispatch|parcel)\b/i.test(lower);
     const hasInquiry = /\b(when|where|status|track|ready|arrived|arrive|reach|coming|update|delay|progress)\b/i.test(lower);
 
@@ -175,12 +214,19 @@ export class OrderService {
       return true;
     }
 
-    // 4. "products be ready" / "product be ready"
+    // 8. "products be ready" / "product be ready"
     if (/\bproduct(s)?\b/i.test(lower) && /\b(ready|deliver|arrive|sent)\b/i.test(lower)) {
       return true;
     }
 
     return false;
+  }
+
+  /**
+   * Backwards-compatible alias for isPostPurchaseOrSupportInquiry
+   */
+  isDeliveryInquiry(text: string): boolean {
+    return this.isPostPurchaseOrSupportInquiry(text);
   }
 
   /**
