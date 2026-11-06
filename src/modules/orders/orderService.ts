@@ -118,6 +118,126 @@ export class OrderService {
 
     return msg;
   }
+
+  /**
+   * Check if inbound message is inquiring about an existing order, package or delivery
+   */
+  isDeliveryInquiry(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+
+    // 1. Explicit Order Ref detection
+    if (/NT-\d{4}-\d+/i.test(lower)) {
+      return true;
+    }
+
+    // 2. Explicit Tracking & Status Phrases
+    const explicitPhrases = [
+      'track order',
+      'track my order',
+      'order status',
+      'delivery status',
+      'track delivery',
+      'dispatch status',
+      'status of my order',
+      'where is my order',
+      'where is my delivery',
+      'where is my product',
+      'where is my package',
+      'when will my order',
+      'when will my product',
+      'when will you deliver',
+      'when are you delivering',
+      'when will you be doing the delivery',
+      'when will the delivery',
+      'when is my delivery',
+      'when is delivery',
+      'when am i getting my order',
+      'when am i getting my product',
+      'is my order ready',
+      'when will my products be ready',
+      'when will my product be ready',
+      'when will it be ready',
+      'how far with my order',
+      'how far with my delivery',
+      'update on my delivery',
+      'update on my order',
+    ];
+
+    if (explicitPhrases.some((p) => lower.includes(p))) {
+      return true;
+    }
+
+    // 3. Subject + Inquiry Combination (e.g. "when will you do the delivery", "what is happening with my order")
+    const hasSubject = /\b(delivery|order|package|dispatch|parcel)\b/i.test(lower);
+    const hasInquiry = /\b(when|where|status|track|ready|arrived|arrive|reach|coming|update|delay|progress)\b/i.test(lower);
+
+    if (hasSubject && hasInquiry) {
+      return true;
+    }
+
+    // 4. "products be ready" / "product be ready"
+    if (/\bproduct(s)?\b/i.test(lower) && /\b(ready|deliver|arrive|sent)\b/i.test(lower)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Extract potential order number from text
+   */
+  extractOrderNumber(text: string): string | null {
+    const match = text.match(/NT-\d{4}-\d+/i);
+    return match ? match[0].toUpperCase() : null;
+  }
+
+  /**
+   * Find most recent customer order by order number or customer phone
+   */
+  async findCustomerOrder(phoneNumber: string, text?: string): Promise<Order | null> {
+    if (text) {
+      const orderNum = this.extractOrderNumber(text);
+      if (orderNum) {
+        const order = await db.getOrderByNumber(orderNum);
+        if (order) return order;
+      }
+    }
+
+    const orders = await db.getOrdersByPhone(phoneNumber);
+    if (orders && orders.length > 0) {
+      return orders[0];
+    }
+
+    return null;
+  }
+
+  /**
+   * Format friendly, reassuring Order Status for WhatsApp
+   */
+  formatOrderStatus(order: Order): string {
+    const statusMap: Record<string, string> = {
+      PENDING: '⏳ Preparing for Dispatch (Awaiting delivery fee confirmation)',
+      CONFIRMED: '✅ Confirmed & Being Packaged',
+      DISPATCHED: '🚚 Out for Delivery / In Transit',
+      DELIVERED: '🎉 Delivered Successfully',
+      CANCELLED: '❌ Cancelled',
+    };
+    const statusText = statusMap[order.order_status] || order.order_status;
+    const item = order.items?.[0];
+    const itemText = item
+      ? `${item.product_name}${item.color || item.size ? ` (${[item.color, item.size].filter(Boolean).join(' / ')})` : ''} x${item.quantity || 1}`
+      : 'Ordered item(s)';
+
+    let msg = `📦 *ORDER STATUS UPDATE*\n\n`;
+    msg += `🔖 *Ref:* ${order.order_number}\n`;
+    msg += `🛍️ *Product:* ${itemText}\n`;
+    msg += `📊 *Status:* ${statusText}\n`;
+    if (order.delivery_address) {
+      msg += `📍 *Delivery Address:*\n${order.delivery_address}\n`;
+    }
+    msg += `\n💬 Our *staff* is actively coordinating your dispatch and will message you shortly! 🙏`;
+    return msg;
+  }
 }
 
 export const orderService = new OrderService();

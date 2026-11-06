@@ -336,6 +336,41 @@ export const db = {
     return MOCK_ORDERS;
   },
 
+  async getOrdersByPhone(phoneNumber: string): Promise<Order[]> {
+    const cleanDigits = phoneNumber.replace(/\D/g, '');
+    const last10 = cleanDigits.slice(-10);
+
+    if (supabaseInstance) {
+      const { data, error } = await supabaseInstance
+        .from('orders')
+        .select('*')
+        .or(`customer_phone.ilike.%${last10}%,customer_phone.ilike.%${cleanDigits}%`)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      if (!error && data && data.length > 0) return data as Order[];
+    }
+
+    return MOCK_ORDERS.filter((o) => {
+      const oDigits = (o.customer_phone || '').replace(/\D/g, '');
+      return oDigits.endsWith(last10) || cleanDigits.endsWith(oDigits.slice(-10)) || oDigits === cleanDigits;
+    });
+  },
+
+  async getOrderByNumber(orderNumber: string): Promise<Order | null> {
+    const cleanRef = orderNumber.trim().toUpperCase();
+    if (supabaseInstance) {
+      const { data, error } = await supabaseInstance
+        .from('orders')
+        .select('*')
+        .ilike('order_number', `%${cleanRef}%`)
+        .limit(1)
+        .maybeSingle();
+      if (!error && data) return data as Order;
+    }
+    const found = MOCK_ORDERS.find((o) => o.order_number.toUpperCase().includes(cleanRef));
+    return found || null;
+  },
+
   async createOrder(orderData: Omit<Order, 'id' | 'created_at'>): Promise<Order> {
     const newOrder: Order = {
       ...orderData,

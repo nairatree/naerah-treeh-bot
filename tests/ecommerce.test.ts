@@ -153,9 +153,6 @@ describe('Nairatee Stores E-Commerce Chatbot Engine Tests', () => {
 
     lead = await followupService.getLead(shopperPhone);
     assert.strictEqual(lead?.status, 'OPTED_OUT', 'Lead must be opted out cleanly when stating no');
-
-    // Clean up: restore bot to PAUSED as requested by merchant
-    await db.updateStoreSettings({ is_bot_active: false });
   });
 
   test('7. Bulk CSV Catalog Import with Variants Generator', async () => {
@@ -170,5 +167,75 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.ok(search.length > 0);
     const pan = search[0];
     assert.strictEqual(pan.variants?.length, 4, 'Should auto-generate 4 color/size combinations');
+  });
+
+  test('8. Hybrid Model: Smart 2-Line Greeting for Standalone Greetings ("Hi", "Good morning")', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const greetingPhone = '2348011223344';
+    chatSessionManager.resetSession(greetingPhone);
+
+    // Prospective buyer sends "Hi"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: greetingPhone,
+      text: 'Hi',
+    });
+
+    let session = chatSessionManager.getSession(greetingPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after smart greeting');
+
+    // Prospective buyer sends "Good morning"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: greetingPhone,
+      text: 'Good morning',
+    });
+    session = chatSessionManager.getSession(greetingPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after smart greeting');
+
+    // Prospective buyer now replies with product name
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: greetingPhone,
+      text: 'wooden chopping board',
+    });
+    session = chatSessionManager.getSession(greetingPhone);
+    assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Advances to product variant selection');
+  });
+
+  test('9. Hybrid Model: Post-Purchase Delivery Status Handler', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+
+    // Test delivery inquiry recognition helper
+    assert.ok(orderService.isDeliveryInquiry('When will you be doing the delivery?'));
+    assert.ok(orderService.isDeliveryInquiry('Good morning, when will my products be ready?'));
+    assert.ok(orderService.isDeliveryInquiry('Where is my order?'));
+    assert.ok(orderService.isDeliveryInquiry('track order NT-2026-1001'));
+    assert.strictEqual(orderService.isDeliveryInquiry('Bro, where are you guys right now?'), false);
+    assert.strictEqual(orderService.isDeliveryInquiry('Good morning, hope the kids are fine?'), false);
+
+    // Existing buyer from MOCK_ORDERS (2348031234567, order NT-2026-1001)
+    const existingBuyerPhone = '2348031234567';
+    chatSessionManager.resetSession(existingBuyerPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: existingBuyerPhone,
+      text: 'When will you be doing the delivery?',
+    });
+
+    let session = chatSessionManager.getSession(existingBuyerPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff after answering delivery status');
+
+    // Unknown buyer checks delivery status
+    const unknownPhone = '2348099112233';
+    chatSessionManager.resetSession(unknownPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: unknownPhone,
+      text: 'When is my delivery?',
+    });
+
+    session = chatSessionManager.getSession(unknownPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff after reassuring customer');
+
+    // Ensure bot stays LIVE & ACTIVE
+    await db.updateStoreSettings({ is_bot_active: true });
   });
 });

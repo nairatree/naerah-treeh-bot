@@ -41,9 +41,33 @@ export class ChatFlowEngine {
       }
     }
 
-    // 2. Check for Live Human Support Trigger
+    // 2. Check for Delivery & Order Status Inquiries (Hybrid Model - Post-Purchase Assistance)
+    if (orderService.isDeliveryInquiry(cleanText)) {
+      const order = await orderService.findCustomerOrder(cleanPhone, cleanText);
+      chatSessionManager.handoverToSupport(cleanPhone);
+
+      if (order) {
+        const statusMsg = orderService.formatOrderStatus(order);
+        await botsailorClient.sendTextMessage(cleanPhone, statusMsg);
+      } else {
+        let msg = `📦 *Order & Delivery Inquiry*\n\n`;
+        msg += `We couldn't immediately locate an active order for this WhatsApp number in our records.\n\n`;
+        msg += `One of our *staff* has been notified and will check with dispatch to assist you directly!\n\n`;
+        msg += `👉 If you have your Order Ref (e.g. *NT-2026-XXXX*), please reply with it so we can track it immediately.`;
+        await botsailorClient.sendTextMessage(cleanPhone, msg);
+      }
+
+      await this.notifyStaffDeliveryInquiry({
+        customerPhone: cleanPhone,
+        inquiryText: cleanText,
+        order,
+      });
+      return;
+    }
+
+    // 3. Check for Live Human Support Trigger
     if (
-      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'staff', 'customer care'].some((k) =>
+      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'speak with staff', 'talk to human', 'human assistance', 'staff', 'customer care', 'call me'].some((k) =>
         lowerText.includes(k)
       )
     ) {
@@ -56,7 +80,7 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 3. Human Support Handover Protection:
+    // 4. Human Support Handover Protection:
     // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
       if (['menu', 'catalog', 'start', 'restart', 'reset'].includes(lowerText)) {
@@ -68,14 +92,14 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 4. Check for Explicit Reset / Menu Commands
+    // 5. Check for Explicit Reset / Menu Commands
     if (['menu', 'catalog', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       await this.sendWelcomeMenu(cleanPhone);
       return;
     }
 
-    // 5. Check for VIP Group Link Request (across any state)
+    // 6. Check for VIP Group Link Request (across any state)
     if (['group', 'vip', 'vip group', 'community', 'join group', 'whatsapp group', 'link'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       let groupMsg = `📲 *Join our VIP WhatsApp Community:*\n${settings.whatsapp_group_link || 'https://chat.whatsapp.com/...'}\n\n`;
@@ -84,7 +108,7 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 6. Handle Opt-out / Objection / Cancellation (across any state)
+    // 7. Handle Opt-out / Objection / Cancellation (across any state)
     if (['no', 'not interested', 'stop', 'cancel', 'don\'t want', 'dont want', 'nevermind', 'never mind'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       await followupService.optOut(cleanPhone);
@@ -95,7 +119,7 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 7. Handle "YES" / "ORDER" from Follow-up while in IDLE
+    // 8. Handle "YES" / "ORDER" from Follow-up while in IDLE
     if (session.state === 'IDLE' && (lowerText === 'yes' || lowerText === '1' || lowerText === 'order' || lowerText === 'i want to buy')) {
       const lead = await followupService.getLead(cleanPhone);
       if (lead && lead.productName) {
@@ -121,6 +145,18 @@ export class ChatFlowEngine {
           }
         }
       }
+    }
+
+    // 9. Smart 2-Line Greeting for Generic Greetings in IDLE (Hybrid Model)
+    if (session.state === 'IDLE' && this.isStandaloneGreeting(cleanText)) {
+      let greeting = `Good day! 👋 Welcome to Nairatee Stores.\n\n`;
+      greeting += `Are you looking to order a product, or would you like to speak with our staff?\n\n`;
+      greeting += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n`;
+      greeting += `👉 Reply *STAFF* for customer support\n`;
+      greeting += `👉 Reply *CATALOG* to view popular items`;
+
+      await botsailorClient.sendTextMessage(cleanPhone, greeting);
+      return;
     }
 
     // 8. State Machine Routing for Active Conversations
@@ -618,6 +654,71 @@ export class ChatFlowEngine {
     } catch (err: any) {
       logger.error('Failed to dispatch support alert to staff WhatsApp:', err.message);
     }
+  }
+
+  /**
+   * Dispatches WhatsApp alert to human staff when customer inquires about an order or delivery
+   */
+  async notifyStaffDeliveryInquiry(params: {
+    customerPhone: string;
+    inquiryText: string;
+    order?: any;
+  }): Promise<void> {
+    try {
+      const settings = await db.getStoreSettings();
+      const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
+      if (!supportPhone || supportPhone === '2348000000000') return;
+
+      let alert = `🚚 *CUSTOMER CHECKING DELIVERY STATUS!* 🚚\n\n`;
+      alert += `• *Customer Phone:* +${params.customerPhone}\n`;
+      if (params.order) {
+        alert += `• *Order Ref:* ${params.order.order_number}\n`;
+        alert += `• *Customer Name:* ${params.order.customer_name}\n`;
+        alert += `• *Order Status:* ${params.order.order_status}\n`;
+        alert += `• *Delivery Address:* ${params.order.delivery_address}\n`;
+      } else {
+        alert += `• *Order Ref:* Not found by phone number\n`;
+      }
+      alert += `• *Customer Inquiry:* "${params.inquiryText}"\n\n`;
+      alert += `👉 *Tap to chat with customer right now:* https://wa.me/${params.customerPhone}`;
+
+      await botsailorClient.sendTextMessage(supportPhone, alert);
+      logger.info(`Dispatched delivery inquiry alert to staff (${supportPhone}) for customer (+${params.customerPhone})`);
+    } catch (err: any) {
+      logger.error('Failed to dispatch delivery inquiry alert to staff WhatsApp:', err.message);
+    }
+  }
+
+  /**
+   * Smart Greeting Filter: Matches standalone greetings only
+   * (e.g. "Hi", "Hello", "Good morning", "Good afternoon", "Good day", etc.)
+   * Casual non-store messages like "Good morning, hope the kids are fine?" or "Bro call me" are NOT standalone greetings.
+   */
+  isStandaloneGreeting(text: string): boolean {
+    const clean = text.toLowerCase().replace(/[^\w\s]/g, '').trim();
+    const greetings = [
+      'hi',
+      'hello',
+      'hey',
+      'good morning',
+      'good afternoon',
+      'good evening',
+      'good day',
+      'howdy',
+      'wassup',
+      'whatsup',
+      'whats up',
+      'yo',
+      'greetings',
+      'hi nairatee',
+      'hello nairatee',
+      'good morning nairatee',
+      'good day nairatee',
+      'morning',
+      'afternoon',
+      'evening',
+    ];
+    return greetings.includes(clean);
   }
 }
 
