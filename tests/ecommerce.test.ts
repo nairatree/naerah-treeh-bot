@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import { catalogService } from '../src/modules/catalog/catalogService.ts';
 import { orderService } from '../src/modules/orders/orderService.ts';
@@ -6,8 +6,81 @@ import { chatSessionManager } from '../src/modules/chat/chatSessionManager.ts';
 import { chatFlowEngine } from '../src/modules/chat/chatFlowEngine.ts';
 import { followupService } from '../src/modules/followup/followupService.ts';
 import { db } from '../src/database/supabaseClient.ts';
+import { config } from '../src/config/environment.ts';
 
 describe('Nairatee Stores E-Commerce Chatbot Engine Tests', () => {
+  before(async () => {
+    // Seed fresh test products and order
+    await db.createProduct(
+      {
+        name: 'Premium Wooden Chopping Board',
+        category_name: 'Kitchen Wares',
+        description: 'High-density, durable hardwood chopping board with anti-bacterial juice groove.',
+        base_price: 8500,
+        media_urls: ['https://images.unsplash.com/photo-1590794056226-79ef3a8147e1?w=800'],
+        tags: ['kitchen', 'chopping board', 'wood', 'cutting board'],
+      },
+      [
+        { sku: 'KT-CHOP-MED-NAT', size: 'Medium (30x20cm)', color: 'Natural Wood', price: 8500, stock_quantity: 50 },
+        { sku: 'KT-CHOP-LRG-NAT', size: 'Large (40x28cm)', color: 'Natural Wood', price: 12000, stock_quantity: 30 },
+      ]
+    );
+
+    await db.createProduct(
+      {
+        name: 'Heavy-Duty 2-in-1 Knapsack Sprayer',
+        category_name: 'Agricultural Tools',
+        description: 'Rechargeable electric and manual backpack sprayer with brass lance.',
+        base_price: 28000,
+        media_urls: ['https://images.unsplash.com/photo-1592417817098-8f3d6910985c?w=800'],
+        tags: ['agriculture', 'sprayer', 'knapsack', 'farming'],
+      },
+      [
+        { sku: 'AG-SPRAY-16L-BLU', size: '16 Litres', color: 'Electric Blue', price: 28000, stock_quantity: 40 },
+        { sku: 'AG-SPRAY-20L-YEL', size: '20 Litres Jumbo', color: 'Safety Yellow', price: 34000, stock_quantity: 18 },
+      ]
+    );
+
+    await db.createOrder({
+      order_number: 'NT-2026-1001',
+      customer_name: 'Chinedu Okafor',
+      customer_phone: '2348031234567',
+      delivery_address: '14 Admiralty Way, Lekki Phase 1',
+      city_state: 'Lagos State',
+      items: [
+        {
+          product_id: 'prod-test-1',
+          product_name: 'Premium Wooden Chopping Board',
+          size: 'Medium (30x20cm)',
+          color: 'Natural Wood',
+          unit_price: 8500,
+          quantity: 1,
+          subtotal: 8500,
+        },
+      ],
+      total_amount: 8500,
+      payment_method: 'POD',
+      payment_status: 'UNPAID',
+      order_status: 'CONFIRMED',
+    });
+  });
+
+  after(async () => {
+    // Purge all test products and orders so live database remains completely fresh and clean
+    const products = await db.getProducts();
+    for (const p of products) {
+      await db.deleteProduct(p.id);
+    }
+    if (config.isLiveSupabase) {
+      const { createClient } = await import('@supabase/supabase-js');
+      const sb = createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY);
+      await sb.from('orders').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await sb.from('product_variants').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await sb.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    }
+    // Ensure master bot switch remains paused
+    await db.updateStoreSettings({ is_bot_active: false });
+  });
   test('1. Catalog Search & Short Punchy Multi-Variant Presentation', async () => {
     const results = await catalogService.search('chopping board');
     assert.ok(results.length > 0, 'Should find chopping board product');
@@ -272,6 +345,48 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff after reassuring customer');
 
     // Ensure bot stays in current merchant state
+    await db.updateStoreSettings({ is_bot_active: false });
+  });
+
+  test('10. Unavailable Product Search: Sends clean notice with Staff, VIP Group, and Menu buttons', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const userPhone = '2348011226688';
+    chatSessionManager.resetSession(userPhone);
+
+    // Customer searches for a product not in stock
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'I want bluetooth speaker',
+    });
+
+    let session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after unavailable product notification');
+
+    // Customer taps "Join VIP Group"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'Join VIP Group',
+    });
+    session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after sending group link');
+
+    // Customer taps "Talk to Staff"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'Talk to Staff',
+    });
+    session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff');
+
+    // Customer taps "Main Menu"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'Main Menu',
+    });
+    session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Resumes catalog menu on Main Menu tap');
+
+    // Ensure bot stays in paused state
     await db.updateStoreSettings({ is_bot_active: false });
   });
 });

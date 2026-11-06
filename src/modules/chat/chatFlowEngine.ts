@@ -100,7 +100,7 @@ export class ChatFlowEngine {
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
       const cleanCmd = lowerText.replace(/[^\w\s]/g, '').trim();
       if (
-        ['menu', 'catalog', 'view catalog', 'see catalog', 'start', 'restart', 'reset'].some((cmd) =>
+        ['menu', 'catalog', 'view catalog', 'see catalog', 'start', 'restart', 'reset', 'main menu'].some((cmd) =>
           cleanCmd.includes(cmd) || lowerText.includes(cmd)
         )
       ) {
@@ -113,7 +113,7 @@ export class ChatFlowEngine {
     }
 
     // 5. Check for Explicit Reset / Menu Commands
-    if (['menu', 'catalog', 'view catalog', 'see catalog', 'view products', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset'].includes(lowerText)) {
+    if (['menu', 'catalog', 'view catalog', 'see catalog', 'view products', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset', 'main menu'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       await this.sendWelcomeMenu(cleanPhone);
       return;
@@ -121,6 +121,7 @@ export class ChatFlowEngine {
 
     // 5b. Check for "Enter Product Name" Button Tap
     if (['enter product name', 'enter product', 'order a product', 'enter_product', 'enter name'].includes(lowerText)) {
+      session.context.awaitingProductSearch = true;
       await botsailorClient.sendTextMessage(
         cleanPhone,
         `🛍️ *What product would you like to order?*\n\nPlease reply with the product name (for example: *Chopping Board*, *Knapsack Sprayer*, *Spin Mop*).`
@@ -129,7 +130,7 @@ export class ChatFlowEngine {
     }
 
     // 6. Check for VIP Group Link Request (across any state)
-    if (['group', 'vip', 'vip group', 'community', 'join group', 'whatsapp group', 'link'].includes(lowerText)) {
+    if (['group', 'vip', 'vip group', 'community', 'join group', 'whatsapp group', 'link', 'join vip group'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       let groupMsg = `📲 *Join our VIP WhatsApp Community:*\n${settings.whatsapp_group_link || 'https://chat.whatsapp.com/...'}\n\n`;
       groupMsg += `New arrivals, product videos & wholesale deals are posted daily! 🛍️✨`;
@@ -215,7 +216,7 @@ export class ChatFlowEngine {
       case 'BROWSING_PRODUCTS':
       default:
         // Smart Idle Handling: Only responds to product matches or explicit shopping intent!
-        await this.handleIdleMessage(cleanPhone, cleanText, lowerText, settings, userName);
+        await this.handleIdleMessage(cleanPhone, cleanText, lowerText, settings, userName, session.context);
         return;
     }
   }
@@ -224,19 +225,27 @@ export class ChatFlowEngine {
    * Smart Idle Message Handler:
    * 1. Searches catalog for product match (e.g. from Meta Ads or organic search).
    * 2. If matched -> presents product and variants.
-   * 3. If no match BUT user used shopping keywords (e.g. "buy", "price", "order", "cost") -> polite guidance with VIP group.
-   * 4. If no match AND no shopping intent (casual chats like "where are you", "ok", "good morning") -> 100% SILENT.
+   * 3. If no match BUT user searched for a product or has shopping intent:
+   *    -> sends polite "Product Currently Unavailable" notice with 3 interactive buttons:
+   *       [ Talk to Staff ], [ Join VIP Group ], [ Main Menu ]
+   * 4. If no match AND casual personal chatter (friends/family) -> 100% SILENT.
    */
   async handleIdleMessage(
     phoneNumber: string,
     cleanText: string,
     lowerText: string,
     settings: Record<string, any>,
-    userName?: string
+    userName?: string,
+    sessionContext?: any
   ): Promise<void> {
     if (!cleanText || cleanText.length < 2) {
       logger.info(`Ignoring short idle message from ${phoneNumber}: "${cleanText}"`);
       return;
+    }
+
+    const wasAwaitingSearch = !!sessionContext?.awaitingProductSearch;
+    if (sessionContext) {
+      sessionContext.awaitingProductSearch = false;
     }
 
     // Attempt catalog search
@@ -297,25 +306,32 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 3. No Product Found: Check for Shopping Intent Keywords
+    // 3. No Product Found: Check for Shopping / Product Search Intent
     const shoppingIntentKeywords = [
       'order', 'buy', 'price', 'cost', 'how much', 'do you have', 'stock',
       'deliver', 'delivery', 'sell', 'discount', 'purchase', 'shipping',
-      'available', 'pay on delivery', 'payment', 'transfer', 'wholesale', 'catalog', 'item'
+      'available', 'pay on delivery', 'payment', 'transfer', 'wholesale', 'catalog', 'item',
+      'product', 'need', 'want', 'i want', 'get', 'looking for', 'search', 'goods', 'spray', 'sprayer', 'board', 'mop'
     ];
     const hasShoppingIntent = shoppingIntentKeywords.some((k) => lowerText.includes(k));
+    const isCasual = this.isCasualNonStoreMessage(cleanText);
 
-    if (hasShoppingIntent) {
-      let msg = `😕 Sorry, we couldn't find an exact match for *"${cleanText}"* in our current catalog.\n\n`;
-      msg += `📂 *Browse categories:* Kitchen Wares, Agricultural Tools, Home & Cleaning.\n\n`;
-      msg += `👉 Type *CATALOG* to see all items.\n`;
-      msg += `👉 Type *STAFF* to speak with our team.`;
+    // If customer was explicitly prompted for product name, or typed shopping keywords, or entered a non-casual item search:
+    if (wasAwaitingSearch || hasShoppingIntent || (!isCasual && cleanText.length >= 3 && cleanText.length <= 60)) {
+      let unavailableMsg = `😕 *Product Currently Unavailable*\n\n`;
+      unavailableMsg += `Sorry, we couldn't find an exact match for *"${cleanText}"* in our current stock right now.\n\n`;
+      unavailableMsg += `👉 You can speak with our *staff*, join our *VIP WhatsApp Group* to see our available items & daily restocks, or view our main menu.`;
 
-      if (settings.whatsapp_group_link) {
-        msg += `\n\n📲 *Join our VIP WhatsApp Group for daily stock:*\n${settings.whatsapp_group_link}`;
-      }
-
-      await botsailorClient.sendTextMessage(phoneNumber, msg);
+      await botsailorClient.sendQuickReplyButtons(
+        phoneNumber,
+        unavailableMsg,
+        [
+          { text: 'Talk to Staff', payload: 'staff' },
+          { text: 'Join VIP Group', payload: 'group' },
+          { text: 'Main Menu', payload: 'menu' },
+        ],
+        'Nairatee Stores'
+      );
       return;
     }
 
@@ -760,6 +776,26 @@ export class ChatFlowEngine {
       'evening',
     ];
     return greetings.includes(clean);
+  }
+
+  /**
+   * Identifies casual, non-store personal chatter from family, friends, and personal contacts
+   * (e.g. "Bro, where are you guys right now?", "Good morning, hope the kids are fine?", "Seen", "Call me")
+   */
+  isCasualNonStoreMessage(text: string): boolean {
+    const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+    const casualPatterns = [
+      /\bwhere\s+(are\s+you|you\s+dey|you\s+at)\b/i,
+      /\bhow\s+(are\s+you|is\s+it|far|things|business|family|life)\b/i,
+      /\bhope\s+(the\s+kids|all\s+is\s+well|you\s+are\s+fine|family\s+is\s+good)\b/i,
+      /\b(call|ring)\s+me\b/i,
+      /\bare\s+you\s+(home|around|at\s+the\s+shop|in\s+lagos|busy)\b/i,
+      /\b(bro|brother|sis|sister|my\s+guy|my\s+bro|boss|padi)\b/i,
+      /\b(wetin\s+dey|wetin\s+happen)\b/i,
+      /^(seen|ok|okay|k|alright|cool|lol|haha|amen|safe|sharp|thanks|thank\s+you|good)$/i,
+      /\b(good\s+morning|good\s+afternoon|good\s+evening|good\s+day)\b/i,
+    ];
+    return casualPatterns.some((pattern) => pattern.test(clean));
   }
 }
 
