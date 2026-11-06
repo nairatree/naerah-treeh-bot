@@ -158,11 +158,11 @@ export class ChatFlowEngine {
 
     // 9. Smart Greeting with Interactive Buttons (Hybrid Model)
     if (session.state === 'IDLE' && this.isStandaloneGreeting(cleanText)) {
-      let greeting = `Good day! 👋 Welcome to Nairatee Stores.\n\n`;
+      let greeting = `Good day! 👋 Welcome to *Nairatee Stores*.\n\n`;
       greeting += `Are you looking to order a product, or would you like me to connect you with our staff?\n\n`;
-      greeting += `👉 Reply with the product name to order (e.g. Chopping Board, Sprayer, Mop)\n`;
-      greeting += `👉 Reply STAFF to connect with our staff\n`;
-      greeting += `👉 Reply CATALOG to view popular items`;
+      greeting += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n`;
+      greeting += `👉 Reply *STAFF* to connect with our staff\n`;
+      greeting += `👉 Reply *CATALOG* to view popular items`;
 
       await botsailorClient.sendQuickReplyButtons(
         cleanPhone,
