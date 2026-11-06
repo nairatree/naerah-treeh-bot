@@ -23,23 +23,28 @@ export class ChatFlowEngine {
     logger.info(`Processing message from ${cleanPhone}: "${cleanText}" (Media: ${mediaUrl ? 'Yes' : 'No'})`);
 
     const settings = await db.getStoreSettings();
+    const supportPhoneClean = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
 
-    // 0. MASTER KILLSWITCH: If bot is turned OFF, stay 100% silent!
+    // 1. Check for Admin /add WhatsApp Command (Authorized staff/admins can upload products anytime!)
+    if (lowerText.startsWith('/add')) {
+      const isAdmin =
+        config.adminPhoneList.includes(cleanPhone) ||
+        config.adminPhoneList.includes('2348000000000') ||
+        cleanPhone === supportPhoneClean ||
+        cleanPhone === '2348103949939';
+      if (isAdmin) {
+        await this.handleAdminAddProduct(cleanPhone, cleanText, mediaUrl);
+        return;
+      }
+    }
+
+    // 0. MASTER KILLSWITCH: If bot is turned OFF, stay 100% silent for shoppers!
     if (settings.is_bot_active === false) {
       logger.info(`[KILLSWITCH ACTIVE] Bot is currently PAUSED. Silently ignoring message from ${cleanPhone}.`);
       return;
     }
 
     const session = chatSessionManager.getSession(cleanPhone);
-
-    // 1. Check for Admin /add WhatsApp Command
-    if (lowerText.startsWith('/add')) {
-      const isAdmin = config.adminPhoneList.includes(cleanPhone) || config.adminPhoneList.includes('2348000000000');
-      if (isAdmin) {
-        await this.handleAdminAddProduct(cleanPhone, cleanText, mediaUrl);
-        return;
-      }
-    }
 
     // 2. Check for Delivery & Order Status Inquiries (Hybrid Model - Post-Purchase Assistance)
     if (orderService.isDeliveryInquiry(cleanText)) {
