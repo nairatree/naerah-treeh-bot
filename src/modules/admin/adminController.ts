@@ -2,19 +2,22 @@ import type { Request, Response } from 'express';
 import { db } from '../../database/supabaseClient.ts';
 import { catalogService } from '../catalog/catalogService.ts';
 import { chatFlowEngine } from '../chat/chatFlowEngine.ts';
+import { followupService } from '../followup/followupService.ts';
 import { config } from '../../config/environment.ts';
 import { logger } from '../../utils/logger.ts';
 
 export const adminController = {
   async getStats(req: Request, res: Response): Promise<void> {
     try {
-      const [products, orders] = await Promise.all([db.getProducts(), db.getOrders()]);
+      const [products, orders, leadStats] = await Promise.all([
+        db.getProducts(),
+        db.getOrders(),
+        followupService.getStats(),
+      ]);
       const totalVariants = products.reduce((sum, p) => sum + (p.variants?.length || 0), 0);
       const totalRevenue = orders
         .filter((o) => o.order_status !== 'CANCELLED')
         .reduce((sum, o) => sum + Number(o.total_amount), 0);
-      const podOrders = orders.filter((o) => o.payment_method === 'POD').length;
-      const transferOrders = orders.filter((o) => o.payment_method === 'BANK_TRANSFER').length;
       const pendingOrders = orders.filter((o) => o.order_status === 'PENDING').length;
 
       res.json({
@@ -22,9 +25,8 @@ export const adminController = {
         totalVariants,
         totalOrders: orders.length,
         totalRevenue,
-        podOrders,
-        transferOrders,
         pendingOrders,
+        leadStats,
         databaseType: db.isLive ? 'Supabase Live' : 'In-Memory Development Mock',
         storeName: config.STORE_NAME,
       });
@@ -179,6 +181,29 @@ export const adminController = {
     } catch (err: any) {
       logger.error('Failed to toggle bot status:', err.message);
       res.status(500).json({ error: 'Failed to toggle bot status' });
+    }
+  },
+
+  async getLeads(req: Request, res: Response): Promise<void> {
+    try {
+      const [leads, stats] = await Promise.all([
+        followupService.getAllLeads(),
+        followupService.getStats(),
+      ]);
+      res.json({ stats, leads });
+    } catch (err: any) {
+      logger.error('Failed to get leads:', err.message);
+      res.status(500).json({ error: 'Failed to fetch leads' });
+    }
+  },
+
+  async triggerFollowups(req: Request, res: Response): Promise<void> {
+    try {
+      const result = await followupService.processDueFollowups();
+      res.json({ status: 'success', result });
+    } catch (err: any) {
+      logger.error('Failed to trigger follow-ups:', err.message);
+      res.status(500).json({ error: 'Failed to trigger follow-ups' });
     }
   },
 };

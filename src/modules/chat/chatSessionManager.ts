@@ -56,6 +56,12 @@ class ChatSessionManager {
     session.updatedAt = Date.now();
   }
 
+  setSelectedQuantity(phoneNumber: string, quantity: number): void {
+    const session = this.getSession(phoneNumber);
+    session.context.selectedQuantity = Math.max(1, quantity);
+    session.updatedAt = Date.now();
+  }
+
   setSelectedPaymentMethod(phoneNumber: string, method: PaymentMethod): void {
     const session = this.getSession(phoneNumber);
     session.context.selectedPaymentMethod = method;

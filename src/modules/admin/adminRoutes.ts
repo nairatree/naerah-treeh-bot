@@ -20,4 +20,7 @@ adminRouter.get('/settings', adminController.getSettings);
 adminRouter.post('/settings', adminController.updateSettings);
 adminRouter.post('/toggle-bot', adminController.toggleBotStatus);
 
+adminRouter.get('/leads', adminController.getLeads);
+adminRouter.post('/leads/followup', adminController.triggerFollowups);
+
 adminRouter.post('/simulate', adminController.simulateMessage);

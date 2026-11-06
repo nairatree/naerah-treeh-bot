@@ -375,6 +375,7 @@
     <div class="header-actions">
       <nav class="nav-tabs">
         <button class="nav-tab active" onclick="switchTab('orders')">📦 Orders</button>
+        <button class="nav-tab" onclick="switchTab('leads')">👥 Leads & Follow-ups</button>
         <button class="nav-tab" onclick="switchTab('products')">🏷️ Products & Variants</button>
         <button class="nav-tab" onclick="switchTab('bulk')">📥 Bulk CSV Import</button>
         <button class="nav-tab" onclick="switchTab('simulator')">💬 Bot Simulator</button>
@@ -431,6 +432,59 @@
             </thead>
             <tbody id="orders-table-body">
               <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading orders...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: LEADS & AUTOMATED FOLLOW-UPS -->
+    <div id="tab-leads" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">👥 Meta Ads Leads & Automated Follow-Up Funnel</div>
+            <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Track interested buyers, abandoned inquiries, and automated re-engagement messages.</p>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn btn-secondary" onclick="fetchLeads()">🔄 Refresh Leads</button>
+            <button class="btn btn-primary" onclick="runFollowupsNow()" style="background: #0284c7;">⚡ Run Follow-Up Check</button>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
+          <div style="background: #0f172a; border: 1px solid var(--card-border); padding: 14px; border-radius: 10px;">
+            <div style="font-size: 12px; color: var(--text-muted); font-weight: 600;">Total Leads Captured</div>
+            <div id="lead-total-count" style="font-size: 22px; font-weight: 800; color: #fff;">0</div>
+          </div>
+          <div style="background: #0f172a; border: 1px solid var(--card-border); padding: 14px; border-radius: 10px;">
+            <div style="font-size: 12px; color: #fbbf24; font-weight: 600;">Pending Address (Abandoned)</div>
+            <div id="lead-pending-count" style="font-size: 22px; font-weight: 800; color: #fbbf24;">0</div>
+          </div>
+          <div style="background: #0f172a; border: 1px solid var(--card-border); padding: 14px; border-radius: 10px;">
+            <div style="font-size: 12px; color: #34d399; font-weight: 600;">Address Submitted (Converted)</div>
+            <div id="lead-purchased-count" style="font-size: 22px; font-weight: 800; color: #34d399;">0</div>
+          </div>
+          <div style="background: #0f172a; border: 1px solid var(--card-border); padding: 14px; border-radius: 10px;">
+            <div style="font-size: 12px; color: var(--text-muted); font-weight: 600;">Opted Out / Closed</div>
+            <div id="lead-optout-count" style="font-size: 22px; font-weight: 800; color: #94a3b8;">0</div>
+          </div>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Customer Phone</th>
+                <th>Product Checked</th>
+                <th>Selected Option & Qty</th>
+                <th>Follow-up Stage</th>
+                <th>Status</th>
+                <th>Direct Staff Action</th>
+              </tr>
+            </thead>
+            <tbody id="leads-table-body">
+              <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading leads...</td></tr>
             </tbody>
           </table>
         </div>
@@ -655,7 +709,7 @@
         const data = await res.json();
         document.getElementById('stat-revenue').innerText = '₦' + (data.totalRevenue || 0).toLocaleString();
         document.getElementById('stat-orders').innerText = data.totalOrders || 0;
-        document.getElementById('stat-pod-count').innerText = (data.podOrders || 0) + ' Pay on Delivery';
+        document.getElementById('stat-pod-count').innerText = (data.leadStats?.pending || 0) + ' In Follow-Up Funnel';
         document.getElementById('stat-products').innerText = data.totalProducts || 0;
         document.getElementById('stat-variants-count').innerText = (data.totalVariants || 0) + ' Multi-Variants';
         document.getElementById('stat-db').innerText = data.databaseType || 'Ready';
@@ -685,7 +739,7 @@
             <td><strong>${o.customer_name}</strong><br><small style="color:var(--text-muted)">${o.customer_phone}</small><br><small style="color:#94a3b8">${o.delivery_address}</small></td>
             <td><strong>${item.product_name || 'Product'}</strong><br>${variantDesc ? '<span class="variant-chip">' + variantDesc + '</span>' : ''}</td>
             <td><strong>₦${Number(o.total_amount).toLocaleString()}</strong></td>
-            <td><span class="payment-badge ${o.payment_method === 'POD' ? 'badge-pod' : 'badge-bank'}">${o.payment_method === 'POD' ? '🚚 POD' : '🏦 Bank Transfer'}</span></td>
+            <td><span class="payment-badge" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);">🚚 Staff Fee Quote</span></td>
             <td><span class="stat-badge badge-${o.order_status === 'DELIVERED' ? 'success' : o.order_status === 'CONFIRMED' ? 'info' : 'warning'}">${o.order_status}</span></td>
             <td>
               <select onchange="updateOrderStatus('${o.id}', this.value)" class="form-select" style="padding: 4px 8px; font-size: 12px; width: auto;">
@@ -713,8 +767,74 @@
         });
         loadStats();
         fetchOrders();
+    fetchLeads();
       } catch (err) {
         alert('Failed to update status');
+      }
+    }
+
+    async function fetchLeads() {
+      try {
+        const res = await fetch('/api/admin/leads', { headers: authHeaders() });
+        const data = await res.json();
+        const tbody = document.getElementById('leads-table-body');
+        tbody.innerHTML = '';
+
+        if (data.stats) {
+          document.getElementById('lead-total-count').innerText = data.stats.total || 0;
+          document.getElementById('lead-pending-count').innerText = data.stats.pending || 0;
+          document.getElementById('lead-purchased-count').innerText = data.stats.purchased || 0;
+          document.getElementById('lead-optout-count').innerText = data.stats.optedOut || 0;
+        }
+
+        const leads = data.leads || [];
+        if (leads.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No customer leads tracked yet.</td></tr>';
+          return;
+        }
+
+        leads.forEach(l => {
+          const tr = document.createElement('tr');
+          const cleanPhone = l.phoneNumber.replace(/\D/g, '');
+          const statusBadge = l.status === 'PURCHASED'
+            ? '<span class="stat-badge badge-success">✅ Address Submitted</span>'
+            : l.status === 'PENDING_ADDRESS'
+            ? '<span class="stat-badge badge-warning">⏳ Pending Address</span>'
+            : '<span class="stat-badge" style="background:#334155;color:#94a3b8;">⚪ Closed / Opted Out</span>';
+
+          const followupLabel = l.followupCount === 0
+            ? '0/2 (New)'
+            : l.followupCount === 1
+            ? '1/2 (Sent Check-in)'
+            : '2/2 (Sent Final Offer)';
+
+          tr.innerHTML = `
+            <td><strong>+${cleanPhone}</strong><br><small style="color:var(--text-muted)">${new Date(l.lastInteractionAt).toLocaleTimeString()}</small></td>
+            <td><strong>${l.productName || 'Product'}</strong></td>
+            <td>${l.variantDesc || 'Standard'} (Qty: ${l.quantity || 1})</td>
+            <td><span class="variant-chip">${followupLabel}</span></td>
+            <td>${statusBadge}</td>
+            <td>
+              <a href="https://wa.me/${cleanPhone}" target="_blank" class="btn btn-primary" style="padding: 4px 10px; font-size: 11px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">
+                💬 Chat Staff
+              </a>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error('Fetch leads error:', err);
+      }
+    }
+
+    async function runFollowupsNow() {
+      try {
+        const res = await fetch('/api/admin/leads/followup', { method: 'POST', headers: authHeaders() });
+        const data = await res.json();
+        alert(`Follow-up check completed! Dispatched ${data.result?.sent || 0} automated messages.`);
+        fetchLeads();
+      } catch (err) {
+        alert('Failed to run follow-ups: ' + err.message);
       }
     }
 
@@ -858,6 +978,7 @@
         setTimeout(() => {
           loadStats();
           fetchOrders();
+    fetchLeads();
         }, 500);
       } catch (err) {
         console.error('Sim error:', err);
@@ -975,6 +1096,7 @@
     checkAuth();
     loadStats();
     fetchOrders();
+    fetchLeads();
     fetchProducts();
     loadSettings();
   </script>

@@ -16,11 +16,19 @@ export class OrderService {
    * "Name: Joy Adebayo, Phone: 08012345678, Address: 12 Allen Avenue, Ikeja, Lagos"
    * or line-by-line
    */
-  parseAddressMessage(text: string, defaultPhone: string): { name: string; phone: string; address: string; cityState?: string } {
+  parseAddressMessage(text: string, defaultPhone: string): { name: string; phone: string; address: string; cityState?: string; quantity?: number } {
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     let name = '';
     let phone = defaultPhone;
     let address = '';
+    let quantity: number | undefined;
+
+    // Check for inline quantity (e.g. "2 pieces", "qty: 3", "quantity: 2", "3 pcs")
+    const qtyMatch = text.match(/(?:qty|quantity)[\s:]*([0-9]+)|([0-9]+)\s*(?:pieces|piece|pcs)/i);
+    if (qtyMatch) {
+      const qVal = parseInt(qtyMatch[1] || qtyMatch[2], 10);
+      if (!isNaN(qVal) && qVal > 0) quantity = qVal;
+    }
 
     for (const line of lines) {
       const lower = line.toLowerCase();
@@ -57,6 +65,7 @@ export class OrderService {
       name,
       phone,
       address,
+      quantity,
     };
   }
 
@@ -66,7 +75,7 @@ export class OrderService {
     deliveryAddress: string;
     cityState?: string;
     items: OrderItem[];
-    paymentMethod: PaymentMethod;
+    paymentMethod?: PaymentMethod;
   }): Promise<Order> {
     const orderNumber = this.generateOrderNumber();
     const totalAmount = params.items.reduce((sum, item) => sum + item.subtotal, 0);
@@ -79,43 +88,32 @@ export class OrderService {
       city_state: params.cityState,
       items: params.items,
       total_amount: totalAmount,
-      payment_method: params.paymentMethod,
-      payment_status: params.paymentMethod === 'POD' ? 'UNPAID' : 'PENDING_VERIFICATION',
-      order_status: 'CONFIRMED',
+      payment_method: params.paymentMethod || 'POD',
+      payment_status: 'UNPAID',
+      order_status: 'PENDING',
+      customer_notes: 'Awaiting staff delivery fee calculation & contact',
     });
 
-    logger.info(`New Order Created: ${order.order_number} (${params.paymentMethod}) for ₦${totalAmount}`);
+    logger.info(`New Order Intent Created: ${order.order_number} for ₦${totalAmount} (Awaiting staff delivery fee)`);
     return order;
   }
 
   formatOrderConfirmation(order: Order, groupLink?: string): string {
     const formattedTotal = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(order.total_amount);
     const item = order.items[0];
-    const itemDetails = item ? `${item.product_name} ${[item.color, item.size].filter(Boolean).join(' / ')}` : 'Products';
+    const itemDetails = item
+      ? `${item.product_name}${item.color || item.size ? ` (${[item.color, item.size].filter(Boolean).join(' / ')})` : ''} x${item.quantity || 1}`
+      : 'Products';
 
-    let msg = `🎉 *ORDER PLACED SUCCESSFULLY!*\n\n`;
-    msg += `🔖 *Order Number:* ${order.order_number}\n`;
+    let msg = `🎉 *THANK YOU FOR YOUR ORDER!*\n\n`;
+    msg += `🔖 *Order Ref:* ${order.order_number}\n`;
     msg += `📦 *Item:* ${itemDetails}\n`;
-    msg += `💰 *Total Amount:* ${formattedTotal}\n`;
-    msg += `🚚 *Delivery Address:*\n${order.delivery_address}\n\n`;
-
-    if (order.payment_method === 'POD') {
-      msg += `💵 *Payment Mode:* *Pay on Delivery (POD)*\n`;
-      msg += `📌 Please have *${formattedTotal}* cash or transfer ready when our dispatch rider arrives.\n\n`;
-    } else {
-      msg += `🏦 *Payment Mode:* *Bank Transfer*\n`;
-      msg += `📌 *Bank Details:*\n`;
-      msg += `• *Bank Name:* ${config.BANK_NAME}\n`;
-      msg += `• *Account Number:* ${config.BANK_ACCOUNT_NUMBER}\n`;
-      msg += `• *Account Name:* ${config.BANK_ACCOUNT_NAME}\n\n`;
-      msg += `📸 Please reply to this chat with your *transfer receipt or payment screenshot* once sent, so we can verify and dispatch immediately.\n\n`;
-    }
-
-    msg += `📞 Our team will contact you on *${order.customer_phone}* before dispatch.\n`;
-    msg += `Thank you for shopping with *${config.STORE_NAME}*! 🌟`;
+    msg += `💰 *Item Total:* ${formattedTotal}\n`;
+    msg += `📍 *Delivery Address:*\n${order.delivery_address}\n\n`;
+    msg += `🚚 One of our *staff* will contact you right away on WhatsApp to confirm your exact delivery fee and finalize delivery.\n\n`;
 
     if (groupLink) {
-      msg += `\n\n📲 *Join our VIP WhatsApp Community for Daily New Arrivals & Discounts:*\n${groupLink}`;
+      msg += `📲 *Join our VIP WhatsApp Group for daily new arrivals & wholesale deals:*\n${groupLink}`;
     }
 
     return msg;

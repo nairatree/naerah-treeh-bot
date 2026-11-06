@@ -78,9 +78,8 @@ export type ConversationState =
   | 'IDLE'
   | 'BROWSING_PRODUCTS'
   | 'SELECTING_VARIANT'
-  | 'CHOOSING_PAYMENT_METHOD'
+  | 'AWAITING_QUANTITY'
   | 'AWAITING_DELIVERY_DETAILS'
-  | 'AWAITING_PAYMENT_RECEIPT'
   | 'HANDED_OVER_TO_SUPPORT';
 
 export interface ConversationContext {
@@ -89,9 +88,23 @@ export interface ConversationContext {
   currentProduct?: Product;
   selectedVariantId?: string;
   selectedVariant?: ProductVariant;
-  selectedPaymentMethod?: PaymentMethod;
+  selectedQuantity?: number;
   pendingOrderNumber?: string;
   temporaryAddressDraft?: string;
+}
+
+export interface CustomerLead {
+  phoneNumber: string;
+  userName?: string;
+  productId?: string;
+  productName: string;
+  variantId?: string;
+  variantDesc?: string;
+  quantity?: number;
+  lastInteractionAt: number;
+  followupCount: number;
+  status: 'PENDING_ADDRESS' | 'PURCHASED' | 'OPTED_OUT' | 'EXPIRED';
+  lastFollowupAt?: number;
 }
 
 export interface ChatSession {

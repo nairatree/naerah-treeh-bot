@@ -2,10 +2,10 @@ import { botsailorClient } from '../../integrations/botsailor/botsailorClient.ts
 import { chatSessionManager } from './chatSessionManager.ts';
 import { catalogService } from '../catalog/catalogService.ts';
 import { orderService } from '../orders/orderService.ts';
+import { followupService } from '../followup/followupService.ts';
 import { db } from '../../database/supabaseClient.ts';
 import { config } from '../../config/environment.ts';
 import { logger } from '../../utils/logger.ts';
-import type { PaymentMethod } from '../../database/types.ts';
 
 export class ChatFlowEngine {
   async processInboundMessage(params: {
@@ -15,7 +15,7 @@ export class ChatFlowEngine {
     mediaType?: 'image' | 'video' | 'document';
     userName?: string;
   }): Promise<void> {
-    const { phoneNumber, text = '', mediaUrl, mediaType = 'image' } = params;
+    const { phoneNumber, text = '', mediaUrl, mediaType = 'image', userName } = params;
     const cleanPhone = phoneNumber.replace(/\D/g, '');
     const cleanText = text.trim();
     const lowerText = cleanText.toLowerCase();
@@ -43,29 +43,28 @@ export class ChatFlowEngine {
 
     // 2. Check for Live Human Support Trigger
     if (
-      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'customer care'].some((k) =>
+      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'staff', 'customer care'].some((k) =>
         lowerText.includes(k)
-      ) ||
-      (session.state === 'CHOOSING_PAYMENT_METHOD' && lowerText === '3')
+      )
     ) {
       chatSessionManager.handoverToSupport(cleanPhone);
       await botsailorClient.sendTextMessage(
         cleanPhone,
-        `👩‍💼 *Live Customer Support Assigned*\n\nA representative has been notified and will assist you here shortly.\n\n_(Type *MENU* anytime to resume automated shopping)._`
+        `👩‍💼 *Customer Support Assigned*\n\nOne of our staff has been notified and will assist you here shortly.\n\n_(Type *MENU* anytime to resume automated shopping)._`
       );
       await this.notifySupportTeam(cleanPhone, session);
       return;
     }
 
     // 3. Human Support Handover Protection:
-    // If user is currently handed over to human support, don't interfere unless they explicitly type MENU/RESTART
+    // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
       if (['menu', 'catalog', 'start', 'restart', 'reset'].includes(lowerText)) {
         chatSessionManager.resetSession(cleanPhone);
         await this.sendWelcomeMenu(cleanPhone);
         return;
       }
-      logger.info(`User ${cleanPhone} is in human support mode. Ignoring message to let human staff converse.`);
+      logger.info(`User ${cleanPhone} is in human staff mode. Ignoring message to let staff converse.`);
       return;
     }
 
@@ -76,34 +75,62 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 5. Handling Payment Receipt Upload
-    if (
-      session.state === 'AWAITING_PAYMENT_RECEIPT' ||
-      (mediaUrl && (lowerText.includes('paid') || lowerText.includes('receipt') || lowerText.includes('transfer')))
-    ) {
-      if (mediaUrl || lowerText.includes('paid') || lowerText.includes('done')) {
-        if (session.context.pendingOrderNumber && mediaUrl) {
-          await db.attachReceiptUrl(session.context.pendingOrderNumber, mediaUrl);
+    // 5. Check for VIP Group Link Request (across any state)
+    if (['group', 'vip', 'vip group', 'community', 'join group', 'whatsapp group', 'link'].includes(lowerText)) {
+      chatSessionManager.resetSession(cleanPhone);
+      let groupMsg = `📲 *Join our VIP WhatsApp Community:*\n${settings.whatsapp_group_link || 'https://chat.whatsapp.com/...'}\n\n`;
+      groupMsg += `New arrivals, product videos & wholesale deals are posted daily! 🛍️✨`;
+      await botsailorClient.sendTextMessage(cleanPhone, groupMsg);
+      return;
+    }
+
+    // 6. Handle Opt-out / Objection / Cancellation (across any state)
+    if (['no', 'not interested', 'stop', 'cancel', 'don\'t want', 'dont want', 'nevermind', 'never mind'].includes(lowerText)) {
+      chatSessionManager.resetSession(cleanPhone);
+      await followupService.optOut(cleanPhone);
+      await botsailorClient.sendTextMessage(
+        cleanPhone,
+        `No problem at all! Feel free to reach out anytime you need anything. Have a wonderful day! 😊✨`
+      );
+      return;
+    }
+
+    // 7. Handle "YES" / "ORDER" from Follow-up while in IDLE
+    if (session.state === 'IDLE' && (lowerText === 'yes' || lowerText === '1' || lowerText === 'order' || lowerText === 'i want to buy')) {
+      const lead = await followupService.getLead(cleanPhone);
+      if (lead && lead.productName) {
+        const results = await catalogService.search(lead.productName);
+        if (results.length > 0) {
+          const topProduct = results[0];
+          chatSessionManager.setCurrentProduct(cleanPhone, topProduct);
+          const variants = topProduct.variants || [];
+          if (variants.length > 0) {
+            chatSessionManager.setState(cleanPhone, 'SELECTING_VARIANT');
+            await botsailorClient.sendTextMessage(
+              cleanPhone,
+              `Great! Let's complete your order for *${topProduct.name}* 🛍️\n\n👉 Reply with your preferred option number:`
+            );
+            return;
+          } else {
+            chatSessionManager.setState(cleanPhone, 'AWAITING_QUANTITY');
+            await botsailorClient.sendTextMessage(
+              cleanPhone,
+              `Great! 🛍️ *${topProduct.name}*\n\n📦 *How many pieces would you like?* (Reply with e.g. 1, 2, or 3)`
+            );
+            return;
+          }
         }
-        await botsailorClient.sendTextMessage(
-          cleanPhone,
-          `✅ *Payment Proof Received!*\n\nThank you for providing your receipt. Our accounts team will verify your transfer and your order will be dispatched promptly! 🚚✨\n\nOrder Ref: *${
-            session.context.pendingOrderNumber || 'Pending'
-          }*`
-        );
-        chatSessionManager.setState(cleanPhone, 'IDLE');
-        return;
       }
     }
 
-    // 6. State Machine Routing for Active Conversations
+    // 8. State Machine Routing for Active Conversations
     switch (session.state) {
       case 'SELECTING_VARIANT':
         await this.handleVariantSelection(cleanPhone, cleanText, session);
         return;
 
-      case 'CHOOSING_PAYMENT_METHOD':
-        await this.handlePaymentMethodChoice(cleanPhone, cleanText, session);
+      case 'AWAITING_QUANTITY':
+        await this.handleQuantitySelection(cleanPhone, cleanText, session);
         return;
 
       case 'AWAITING_DELIVERY_DETAILS':
@@ -114,7 +141,7 @@ export class ChatFlowEngine {
       case 'BROWSING_PRODUCTS':
       default:
         // Smart Idle Handling: Only responds to product matches or explicit shopping intent!
-        await this.handleIdleMessage(cleanPhone, cleanText, lowerText, settings);
+        await this.handleIdleMessage(cleanPhone, cleanText, lowerText, settings, userName);
         return;
     }
   }
@@ -123,14 +150,15 @@ export class ChatFlowEngine {
    * Smart Idle Message Handler:
    * 1. Searches catalog for product match (e.g. from Meta Ads or organic search).
    * 2. If matched -> presents product and variants.
-   * 3. If no match BUT user used shopping keywords (e.g. "buy", "price", "order", "cost") -> polite guidance.
+   * 3. If no match BUT user used shopping keywords (e.g. "buy", "price", "order", "cost") -> polite guidance with VIP group.
    * 4. If no match AND no shopping intent (casual chats like "where are you", "ok", "good morning") -> 100% SILENT.
    */
   async handleIdleMessage(
     phoneNumber: string,
     cleanText: string,
     lowerText: string,
-    settings: Record<string, any>
+    settings: Record<string, any>,
+    userName?: string
   ): Promise<void> {
     if (!cleanText || cleanText.length < 2) {
       logger.info(`Ignoring short idle message from ${phoneNumber}: "${cleanText}"`);
@@ -144,6 +172,13 @@ export class ChatFlowEngine {
       // 1. Direct Product Match Found!
       const topProduct = results[0];
       chatSessionManager.setCurrentProduct(phoneNumber, topProduct);
+
+      // Record lead in follow-up tracker
+      await followupService.recordLead({
+        phoneNumber,
+        product: topProduct,
+        userName,
+      });
 
       const formatted = catalogService.formatProductMessage(topProduct);
       if (formatted.mediaUrl) {
@@ -166,13 +201,29 @@ export class ChatFlowEngine {
           await botsailorClient.sendQuickReplyButtons(phoneNumber, `🎨 *Tap your preferred option below:*`, buttons);
         }
       } else {
-        chatSessionManager.setState(phoneNumber, 'CHOOSING_PAYMENT_METHOD');
-        await this.promptPaymentMethod(phoneNumber, topProduct.name, topProduct.base_price);
+        chatSessionManager.setState(phoneNumber, 'AWAITING_QUANTITY');
+        await botsailorClient.sendQuickReplyButtons(
+          phoneNumber,
+          `📦 *How many pieces would you like to order?*`,
+          [
+            { text: '1 Piece', payload: '1' },
+            { text: '2 Pieces', payload: '2' },
+            { text: '3 Pieces', payload: '3' },
+          ]
+        );
       }
       return;
     }
 
-    // 2. No Product Found: Check for Shopping Intent Keywords
+    // 2. Check if user is asking to join group or see catalog
+    if (['join', 'group', 'vip', 'more items', 'other items', 'catalog', 'see products'].some((k) => lowerText.includes(k))) {
+      let groupMsg = `📲 *Join our VIP WhatsApp Group:*\n${settings.whatsapp_group_link || 'https://chat.whatsapp.com/...'}\n\n`;
+      groupMsg += `Browse 500+ items with daily videos, photos & wholesale prices! 🛍️`;
+      await botsailorClient.sendTextMessage(phoneNumber, groupMsg);
+      return;
+    }
+
+    // 3. No Product Found: Check for Shopping Intent Keywords
     const shoppingIntentKeywords = [
       'order', 'buy', 'price', 'cost', 'how much', 'do you have', 'stock',
       'deliver', 'delivery', 'sell', 'discount', 'purchase', 'shipping',
@@ -181,14 +232,10 @@ export class ChatFlowEngine {
     const hasShoppingIntent = shoppingIntentKeywords.some((k) => lowerText.includes(k));
 
     if (hasShoppingIntent) {
-      // User is genuinely trying to buy/inquire about something not in catalog
       let msg = `😕 Sorry, we couldn't find an exact match for *"${cleanText}"* in our current catalog.\n\n`;
-      msg += `📂 *Browse our categories:*\n`;
-      msg += `1️⃣ *Kitchen Wares*\n`;
-      msg += `2️⃣ *Agricultural Tools*\n`;
-      msg += `3️⃣ *Home & Cleaning*\n\n`;
+      msg += `📂 *Browse categories:* Kitchen Wares, Agricultural Tools, Home & Cleaning.\n\n`;
       msg += `👉 Type *CATALOG* to see all items.\n`;
-      msg += `👉 Type *SUPPORT* to ask our sales representative.`;
+      msg += `👉 Type *STAFF* to speak with our team.`;
 
       if (settings.whatsapp_group_link) {
         msg += `\n\n📲 *Join our VIP WhatsApp Group for daily stock:*\n${settings.whatsapp_group_link}`;
@@ -198,33 +245,28 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 3. Casual / Unrelated Message (Friends, family, personal contacts):
+    // 4. Casual / Unrelated Message (Friends, family, personal contacts):
     // DO NOT RESPOND! Stay 100% silent so human conversations are completely untouched!
     logger.info(`[ANTI-INTERFERENCE] Ignoring casual non-store message from ${phoneNumber}: "${cleanText}"`);
   }
 
   /**
-   * Welcome Menu & Introduction
+   * Welcome Menu & Introduction (Short & Nigerian-friendly)
    */
   async sendWelcomeMenu(phoneNumber: string): Promise<void> {
     const [categories, settings] = await Promise.all([catalogService.getCategories(), db.getStoreSettings()]);
     let msg = `👋 *Welcome to ${settings.store_name || config.STORE_NAME}!* 🛍️\n\n`;
-    msg += `We deliver high-quality products directly to your doorstep across Nigeria.\n\n`;
+    msg += `We deliver doorstep across Nigeria.\n\n`;
     msg += `📂 *POPULAR CATEGORIES:*\n`;
 
     categories.forEach((cat) => {
       msg += `• ${cat.icon_emoji || '📦'} *${cat.name}*\n`;
     });
 
-    msg += `\n🔍 *How to order:* Simply type what you are looking for!\n`;
-    msg += `_Examples:_ \n`;
-    msg += `👉 *"Wooden Chopping Board"*\n`;
-    msg += `👉 *"Knapsack Sprayer"*\n`;
-    msg += `👉 *"Spin Mop"*\n\n`;
-    msg += `_Or type *SUPPORT* to speak with our team._`;
+    msg += `\n🔍 *To order:* Simply type what you want (e.g. *"Chopping Board"*, *"Knapsack Sprayer"*, *"Spin Mop"*).\n`;
 
     if (settings.whatsapp_group_link) {
-      msg += `\n\n📲 *Join our VIP WhatsApp Catalog Group:*\n${settings.whatsapp_group_link}\n_(New arrivals & wholesale prices posted daily!)_`;
+      msg += `\n📲 *Join our VIP WhatsApp Group for daily new arrivals:*\n${settings.whatsapp_group_link}`;
     }
 
     await botsailorClient.sendTextMessage(phoneNumber, msg);
@@ -266,114 +308,112 @@ export class ChatFlowEngine {
     }
 
     if (!selectedVariant) {
+      // Check if user already sent address directly in this message!
+      const parsedAddr = orderService.parseAddressMessage(text, phoneNumber);
+      if (parsedAddr.address && parsedAddr.address.length >= 10 && (parsedAddr.name !== 'Valued Customer' || text.includes('080') || text.includes('090') || text.includes('070') || text.includes('081'))) {
+        selectedVariant = variants[0];
+        chatSessionManager.setSelectedVariant(phoneNumber, selectedVariant);
+        chatSessionManager.setSelectedQuantity(phoneNumber, parsedAddr.quantity || 1);
+        await this.handleDeliveryDetailsSubmission(phoneNumber, text, session);
+        return;
+      }
+
       await botsailorClient.sendTextMessage(
         phoneNumber,
-        `⚠️ Please reply with a valid option number between *1* and *${variants.length}*, or tap an option button.`
+        `⚠️ Please reply with your option number (e.g. *1* or *2*)`
       );
       return;
     }
 
     chatSessionManager.setSelectedVariant(phoneNumber, selectedVariant);
-    chatSessionManager.setState(phoneNumber, 'CHOOSING_PAYMENT_METHOD');
+    chatSessionManager.setState(phoneNumber, 'AWAITING_QUANTITY');
+
+    // Update lead in follow-up tracker
+    await followupService.recordLead({
+      phoneNumber,
+      product,
+      variant: selectedVariant,
+    });
 
     const formattedPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(selectedVariant.price);
-    const variantDesc = [selectedVariant.color, selectedVariant.size].filter(Boolean).join(' | ');
+    const variantDesc = [selectedVariant.color, selectedVariant.size].filter(Boolean).join(' - ');
 
-    let msg = `✅ *Option Selected:*\n`;
-    msg += `🛍️ *${product.name}*\n`;
-    msg += `🎨 *Variant:* ${variantDesc}\n`;
-    msg += `💰 *Price:* ${formattedPrice}\n\n`;
-
-    await botsailorClient.sendTextMessage(phoneNumber, msg);
-    await this.promptPaymentMethod(phoneNumber, product.name, selectedVariant.price, variantDesc);
-  }
-
-  /**
-   * Prompt Payment Method using Interactive WhatsApp Quick-Reply Buttons!
-   */
-  async promptPaymentMethod(phoneNumber: string, productName: string, price: number, variantText?: string): Promise<void> {
-    const formattedPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(price);
-
-    const bodyText = `💳 *HOW WOULD YOU LIKE TO PAY?*\n\n🛍️ *Item:* ${productName} ${variantText ? `(${variantText})` : ''}\n💰 *Total:* ${formattedPrice}\n\nTap your preferred checkout option below:`;
+    let msg = `✅ *Option Selected:* ${variantDesc} (${formattedPrice})\n\n`;
+    msg += `📦 *How many pieces would you like to order?*\n`;
+    msg += `👉 Reply with a number (e.g. *1*, *2*, or *3*)`;
 
     await botsailorClient.sendQuickReplyButtons(
       phoneNumber,
-      bodyText,
+      msg,
       [
-        { text: '🚚 Pay on Delivery', payload: '1' },
-        { text: '🏦 Bank Transfer', payload: '2' },
-        { text: '💬 Talk to Support', payload: '3' },
+        { text: '1 Piece', payload: '1' },
+        { text: '2 Pieces', payload: '2' },
+        { text: '3 Pieces', payload: '3' },
       ],
-      'Payment Selection'
+      'Quantity'
     );
   }
 
   /**
-   * Handle Payment Method Choice
+   * Handle Quantity Selection
    */
-  async handlePaymentMethodChoice(phoneNumber: string, text: string, session: any): Promise<void> {
-    const clean = text.trim().toLowerCase();
-    let method: PaymentMethod | null = null;
+  async handleQuantitySelection(phoneNumber: string, text: string, session: any): Promise<void> {
+    const product = session.context.currentProduct;
+    const variant = session.context.selectedVariant;
 
-    if (clean === '1' || clean.includes('delivery') || clean.includes('pod')) {
-      method = 'POD';
-    } else if (clean === '2' || clean.includes('transfer') || clean.includes('bank') || clean.includes('pay now')) {
-      method = 'BANK_TRANSFER';
-    } else if (clean === '3' || clean.includes('support')) {
-      chatSessionManager.handoverToSupport(phoneNumber);
-      await botsailorClient.sendTextMessage(
-        phoneNumber,
-        `👩‍💼 A customer support agent will join this chat shortly to assist you.`
-      );
+    if (!product) {
+      chatSessionManager.resetSession(phoneNumber);
+      await this.sendWelcomeMenu(phoneNumber);
       return;
     }
 
-    if (!method) {
-      await botsailorClient.sendTextMessage(
-        phoneNumber,
-        `⚠️ Please reply with:\n*1* for Pay on Delivery\n*2* for Bank Transfer\n*3* for Human Support`
-      );
+    // Check if user sent full address in this step directly!
+    const parsedAddr = orderService.parseAddressMessage(text, phoneNumber);
+    if (parsedAddr.address && parsedAddr.address.length >= 10 && (parsedAddr.name !== 'Valued Customer' || text.includes('080') || text.includes('090') || text.includes('070') || text.includes('081'))) {
+      chatSessionManager.setSelectedQuantity(phoneNumber, parsedAddr.quantity || session.context.selectedQuantity || 1);
+      await this.handleDeliveryDetailsSubmission(phoneNumber, text, session);
       return;
     }
 
-    chatSessionManager.setSelectedPaymentMethod(phoneNumber, method);
+    const cleanDigits = text.replace(/\D/g, '');
+    let qty = parseInt(cleanDigits, 10);
+    if (isNaN(qty) || qty <= 0) {
+      qty = 1;
+    }
+
+    chatSessionManager.setSelectedQuantity(phoneNumber, qty);
     chatSessionManager.setState(phoneNumber, 'AWAITING_DELIVERY_DETAILS');
 
-    const variant = session.context.selectedVariant;
-    const product = session.context.currentProduct;
-    const price = variant ? variant.price : product?.base_price || 0;
-    const formattedPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(price);
+    // Update lead in follow-up tracker
+    await followupService.recordLead({
+      phoneNumber,
+      product,
+      variant,
+      quantity: qty,
+    });
 
-    let msg = '';
-    if (method === 'BANK_TRANSFER') {
-      msg += `🏦 *OFFICIAL COMPANY BANK DETAILS:*\n\n`;
-      msg += `• *Bank Name:* ${config.BANK_NAME}\n`;
-      msg += `• *Account Number:* ${config.BANK_ACCOUNT_NUMBER}\n`;
-      msg += `• *Account Name:* ${config.BANK_ACCOUNT_NAME}\n`;
-      msg += `• *Amount to Transfer:* ${formattedPrice}\n\n`;
-      msg += `📌 _Please make the transfer and send your receipt screenshot here!_\n\n`;
-    } else {
-      msg += `🚚 *PAY ON DELIVERY SELECTED!*\n\n`;
-      msg += `You will pay *${formattedPrice}* when our dispatch rider delivers to your doorstep.\n\n`;
-    }
-
-    msg += `📝 *PLEASE PROVIDE YOUR DELIVERY DETAILS:*\n`;
-    msg += `Reply to this chat with your details in this format:\n\n`;
+    let msg = `Got it! 📦 *${qty} piece(s) reserved.*\n\n`;
+    msg += `🚚 Please reply with your *Delivery Details* to complete your order:\n\n`;
     msg += `• *Full Name:*\n`;
-    msg += `• *Phone Number:*\n`;
-    msg += `• *Delivery Address & City/State:*\n\n`;
-    msg += `_(You can send it all in one message!)_`;
+    msg += `• *Delivery Address & City/State:*\n`;
+    msg += `• *Phone Number:*\n\n`;
+    msg += `_(You can send everything in one single message!)_`;
 
     await botsailorClient.sendTextMessage(phoneNumber, msg);
   }
 
   /**
-   * Handle Delivery Details Submission & Order Creation
+   * Handle Delivery Details Submission & Order Creation:
+   * 1. Creates order with status PENDING (Awaiting staff delivery fee quote).
+   * 2. Marks lead as PURCHASED (Follow-up stopped).
+   * 3. Sends customer short confirmation with reassurance that staff will contact them + VIP group invite.
+   * 4. Dispatches instant WhatsApp alert to staff phone with direct WhatsApp link.
+   * 5. Sets state to HANDED_OVER_TO_SUPPORT so bot will never interrupt staff chat.
    */
   async handleDeliveryDetailsSubmission(phoneNumber: string, text: string, session: any): Promise<void> {
     const product = session.context.currentProduct;
     const variant = session.context.selectedVariant;
-    const method = session.context.selectedPaymentMethod || 'POD';
+    const quantity = session.context.selectedQuantity || 1;
 
     if (!product) {
       chatSessionManager.resetSession(phoneNumber);
@@ -386,11 +426,12 @@ export class ChatFlowEngine {
     if (!parsed.address || parsed.address.length < 5) {
       await botsailorClient.sendTextMessage(
         phoneNumber,
-        `⚠️ Please include your complete delivery address (Street name, Area, City/State) so our dispatch rider can locate you easily.`
+        `⚠️ Please include your complete delivery address (Street name, Area, City/State) so our dispatch team can locate you easily.`
       );
       return;
     }
 
+    const finalQuantity = parsed.quantity || quantity;
     const unitPrice = variant ? variant.price : product.base_price;
     const orderItem = {
       product_id: product.id,
@@ -399,8 +440,8 @@ export class ChatFlowEngine {
       size: variant?.size,
       color: variant?.color,
       unit_price: unitPrice,
-      quantity: 1,
-      subtotal: unitPrice,
+      quantity: finalQuantity,
+      subtotal: unitPrice * finalQuantity,
     };
 
     const order = await orderService.createCustomerOrder({
@@ -408,20 +449,71 @@ export class ChatFlowEngine {
       customerPhone: parsed.phone,
       deliveryAddress: parsed.address,
       items: [orderItem],
-      paymentMethod: method,
+      paymentMethod: 'POD',
     });
 
     chatSessionManager.setPendingOrderNumber(phoneNumber, order.order_number);
+    chatSessionManager.handoverToSupport(phoneNumber);
 
-    if (method === 'BANK_TRANSFER') {
-      chatSessionManager.setState(phoneNumber, 'AWAITING_PAYMENT_RECEIPT');
-    } else {
-      chatSessionManager.setState(phoneNumber, 'IDLE');
-    }
+    // Stop sales follow-ups
+    await followupService.markPurchased(phoneNumber);
 
     const settings = await db.getStoreSettings();
+
+    // 1. Send confirmation to customer
     const confirmationMsg = orderService.formatOrderConfirmation(order, settings.whatsapp_group_link);
     await botsailorClient.sendTextMessage(phoneNumber, confirmationMsg);
+
+    // 2. Alert staff WhatsApp number immediately!
+    await this.notifyStaffNewOrder({
+      order,
+      productName: product.name,
+      variantDesc: variant ? [variant.color, variant.size].filter(Boolean).join(' - ') : undefined,
+      quantity: finalQuantity,
+      customerName: parsed.name,
+      customerPhone: parsed.phone,
+      deliveryAddress: parsed.address,
+    });
+  }
+
+  /**
+   * Dispatches WhatsApp alert to human staff phone number when address is submitted
+   */
+  async notifyStaffNewOrder(params: {
+    order: any;
+    productName: string;
+    variantDesc?: string;
+    quantity: number;
+    customerName: string;
+    customerPhone: string;
+    deliveryAddress: string;
+  }): Promise<void> {
+    try {
+      const settings = await db.getStoreSettings();
+      const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
+      if (!supportPhone || supportPhone === '2348000000000') {
+        logger.warn('Staff alert not sent: No valid support phone configured in store settings yet.');
+        return;
+      }
+
+      const totalFormatted = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(params.order.total_amount);
+      const variantText = params.variantDesc ? ` (${params.variantDesc})` : '';
+
+      let alert = `🚨 *NEW ORDER INTENT — ADDRESS SUBMITTED!* 🚨\n\n`;
+      alert += `A buyer is ready! Please contact them to confirm delivery fee:\n\n`;
+      alert += `• *Order Ref:* ${params.order.order_number}\n`;
+      alert += `• *Customer Name:* ${params.customerName}\n`;
+      alert += `• *Phone:* +${params.customerPhone}\n`;
+      alert += `• *Address:* ${params.deliveryAddress}\n`;
+      alert += `• *Product:* ${params.productName}${variantText}\n`;
+      alert += `• *Quantity:* ${params.quantity} piece(s) (${totalFormatted})\n\n`;
+      alert += `👉 *Tap to chat with customer right now:* https://wa.me/${params.customerPhone}`;
+
+      await botsailorClient.sendTextMessage(supportPhone, alert);
+      logger.info(`Dispatched new order alert to staff (${supportPhone}) for customer (+${params.customerPhone})`);
+    } catch (err: any) {
+      logger.error('Failed to dispatch new order alert to staff WhatsApp:', err.message);
+    }
   }
 
   /**
@@ -514,8 +606,8 @@ export class ChatFlowEngine {
         ? [session.context.selectedVariant.color, session.context.selectedVariant.size].filter(Boolean).join(' - ')
         : 'None selected yet';
 
-      let alert = `🚨 *LIVE CUSTOMER SUPPORT ALERT!* 🚨\n\n`;
-      alert += `A customer requested human assistance on WhatsApp:\n`;
+      let alert = `🚨 *LIVE CUSTOMER SUPPORT REQUEST!* 🚨\n\n`;
+      alert += `A customer requested human staff assistance on WhatsApp:\n`;
       alert += `• *Customer Phone:* +${customerPhone}\n`;
       alert += `• *Product of Interest:* ${item}\n`;
       alert += `• *Selected Variant:* ${variant}\n\n`;

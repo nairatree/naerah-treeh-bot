@@ -16,7 +16,7 @@ export class CatalogService {
   }
 
   /**
-   * Format product message for WhatsApp presentation (Prioritizes video if available, falls back to picture)
+   * Format product message for WhatsApp presentation (Short, punchy & video/image prioritized)
    */
   formatProductMessage(product: Product): { text: string; mediaUrl?: string; mediaType: 'image' | 'video' } {
     const urls = product.media_urls || [];
@@ -28,24 +28,31 @@ export class CatalogService {
     const mediaType: 'image' | 'video' = videoUrl ? 'video' : 'image';
     const baseFormattedPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(product.base_price);
 
+    // Clean short description (1-2 brief sentences max)
+    const shortDesc = (product.description || '')
+      .split(/\r?\n/)[0]
+      .split('. ')
+      .slice(0, 2)
+      .join('. ')
+      .trim();
+
     let text = `🛍️ *${product.name.toUpperCase()}*\n`;
-    text += `📂 *Category:* ${product.category_name}\n`;
-    text += `💰 *Starting Price:* ${baseFormattedPrice}\n\n`;
-    text += `📝 *Description:*\n${product.description}\n\n`;
+    text += `💰 *Price:* ${baseFormattedPrice}\n`;
+    if (shortDesc) {
+      text += `${shortDesc}\n`;
+    }
 
     const variants = product.variants || [];
     if (variants.length > 0) {
-      text += `🎨 *AVAILABLE SIZES & COLORS:*\n`;
+      text += `\n🎨 *Available Options:*\n`;
       variants.forEach((v, idx) => {
         const variantPrice = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(v.price);
-        const sizeInfo = v.size ? `Size: ${v.size}` : '';
-        const colorInfo = v.color ? `Color: ${v.color}` : '';
-        const combo = [colorInfo, sizeInfo].filter(Boolean).join(' | ');
-        text += `${idx + 1}️⃣ *Option ${idx + 1}:* ${combo} — *${variantPrice}*\n`;
+        const combo = [v.color, v.size].filter(Boolean).join(' - ') || `Option ${idx + 1}`;
+        text += `${idx + 1}️⃣ ${combo} — *${variantPrice}*\n`;
       });
-      text += `\n👉 *Reply with the number (e.g. 1) to select your option.*`;
+      text += `\n👉 Reply with your option number (e.g. *1*)`;
     } else {
-      text += `👉 *Reply "BUY" to place your order.*`;
+      text += `\n👉 Reply *BUY* to order.`;
     }
 
     return { text, mediaUrl: selectedMedia, mediaType };
