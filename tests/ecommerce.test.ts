@@ -271,7 +271,7 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     session = chatSessionManager.getSession(unknownPhone);
     assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff after reassuring customer');
 
-    // Ensure bot stays LIVE & ACTIVE
-    await db.updateStoreSettings({ is_bot_active: true });
+    // Ensure bot stays in current merchant state
+    await db.updateStoreSettings({ is_bot_active: false });
   });
 });
