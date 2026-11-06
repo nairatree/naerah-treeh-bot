@@ -3,8 +3,17 @@ import type { Product, ProductVariant, Category } from '../../database/types.ts'
 import { logger } from '../../utils/logger.ts';
 
 export class CatalogService {
+  private cachedCategories: Category[] | null = null;
+  private categoriesExpiry = 0;
+
   async getCategories(): Promise<Category[]> {
-    return db.getCategories();
+    if (this.cachedCategories && Date.now() < this.categoriesExpiry) {
+      return this.cachedCategories;
+    }
+    const categories = await db.getCategories();
+    this.cachedCategories = categories;
+    this.categoriesExpiry = Date.now() + 60 * 1000;
+    return categories;
   }
 
   async search(query: string): Promise<Product[]> {

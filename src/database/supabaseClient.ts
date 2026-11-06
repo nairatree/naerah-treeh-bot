@@ -125,6 +125,8 @@ const MOCK_ORDERS: Order[] = [
 ];
 
 let supabaseInstance: SupabaseClient | null = null;
+let cachedSettings: Record<string, any> | null = null;
+let settingsCacheExpiry = 0;
 
 if (config.isLiveSupabase) {
   try {
@@ -426,6 +428,11 @@ export const db = {
   },
 
   async getStoreSettings(): Promise<Record<string, any>> {
+    // Fast in-memory cache check (15 seconds TTL) to eliminate Supabase latency on every WhatsApp message
+    if (cachedSettings && Date.now() < settingsCacheExpiry) {
+      return cachedSettings;
+    }
+
     const defaults = {
       store_name: config.STORE_NAME,
       support_phone: config.SUPPORT_PHONE_NUMBER,
@@ -456,36 +463,44 @@ export const db = {
             result[row.key] = row.value;
           }
         });
+        cachedSettings = result;
+        settingsCacheExpiry = Date.now() + 15 * 1000;
         return result;
       }
     }
 
+    cachedSettings = defaults;
+    settingsCacheExpiry = Date.now() + 15 * 1000;
     return defaults;
   },
 
   async updateStoreSettings(settings: Record<string, any>): Promise<boolean> {
+    const current = await this.getStoreSettings();
+    const updated = { ...current, ...settings };
+    cachedSettings = updated;
+    settingsCacheExpiry = Date.now() + 15 * 1000;
+
     if (supabaseInstance) {
       if (settings.bank_name || settings.account_number || settings.account_name) {
         await supabaseInstance.from('store_settings').upsert({
           key: 'bank_details',
           value: {
-            bank_name: settings.bank_name || config.BANK_NAME,
-            account_number: settings.account_number || config.BANK_ACCOUNT_NUMBER,
-            account_name: settings.account_name || config.BANK_ACCOUNT_NAME,
+            bank_name: updated.bank_name,
+            account_number: updated.account_number,
+            account_name: updated.account_name,
           },
           updated_at: new Date().toISOString(),
         });
       }
 
-      const current = await this.getStoreSettings();
       await supabaseInstance.from('store_settings').upsert({
         key: 'store_info',
         value: {
-          store_name: settings.store_name || current.store_name,
-          support_phone: settings.support_phone || current.support_phone,
-          whatsapp_group_link: settings.whatsapp_group_link !== undefined ? settings.whatsapp_group_link : current.whatsapp_group_link,
-          is_bot_active: settings.is_bot_active !== undefined ? settings.is_bot_active : current.is_bot_active,
-          trigger_mode: settings.trigger_mode || current.trigger_mode,
+          store_name: updated.store_name,
+          support_phone: updated.support_phone,
+          whatsapp_group_link: updated.whatsapp_group_link,
+          is_bot_active: updated.is_bot_active,
+          trigger_mode: updated.trigger_mode,
         },
         updated_at: new Date().toISOString(),
       });

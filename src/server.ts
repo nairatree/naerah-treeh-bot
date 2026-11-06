@@ -24,6 +24,18 @@ const server = app.listen(config.PORT, () => {
       logger.error('Error in background follow-up job:', err.message);
     }
   }, FOLLOWUP_INTERVAL_MS);
+
+  // Keepalive Self-Ping every 5 minutes to prevent Render cold starts and ensure instant WhatsApp responses
+  const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      await fetch(`http://localhost:${config.PORT}/health`);
+      const targetUrl = process.env.RENDER_EXTERNAL_URL || 'https://naerah-treeh-bot.onrender.com';
+      await fetch(`${targetUrl}/health`);
+    } catch {
+      // Ignore keepalive network blips
+    }
+  }, KEEPALIVE_INTERVAL_MS);
 });
 
 process.on('SIGTERM', () => {

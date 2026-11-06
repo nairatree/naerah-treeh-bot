@@ -57,11 +57,14 @@ export class ChatFlowEngine {
         await botsailorClient.sendTextMessage(cleanPhone, msg);
       }
 
-      await this.notifyStaffDeliveryInquiry({
+      // Non-blocking staff alert for instant customer response
+      this.notifyStaffDeliveryInquiry({
         customerPhone: cleanPhone,
         inquiryText: cleanText,
         order,
-      });
+      }).catch((err) =>
+        logger.error('Failed to notify staff of delivery inquiry in background:', err.message)
+      );
       return;
     }
 
@@ -72,18 +75,30 @@ export class ChatFlowEngine {
       )
     ) {
       chatSessionManager.handoverToSupport(cleanPhone);
-      await botsailorClient.sendTextMessage(
+      await botsailorClient.sendQuickReplyButtons(
         cleanPhone,
-        `👩‍💼 *Customer Support Assigned*\n\nOne of our staff has been notified and will assist you here shortly.\n\n_(Type *MENU* anytime to resume automated shopping)._`
+        `👩‍💼 *Customer Support Assigned*\n\nOne of our staff has been notified and will assist you here shortly.\n\n_(Type *MENU* anytime to resume automated shopping)._`,
+        [
+          { text: '📂 MENU', payload: 'menu' },
+        ],
+        'Customer Support'
       );
-      await this.notifySupportTeam(cleanPhone, session);
+      // Non-blocking staff alert for lightning fast customer response
+      this.notifySupportTeam(cleanPhone, session).catch((err) =>
+        logger.error('Failed to notify staff in background:', err.message)
+      );
       return;
     }
 
     // 4. Human Support Handover Protection:
     // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
-      if (['menu', 'catalog', 'view catalog', 'see catalog', 'start', 'restart', 'reset'].includes(lowerText)) {
+      const cleanCmd = lowerText.replace(/[^\w\s]/g, '').trim();
+      if (
+        ['menu', 'catalog', 'view catalog', 'see catalog', 'start', 'restart', 'reset'].some((cmd) =>
+          cleanCmd.includes(cmd) || lowerText.includes(cmd)
+        )
+      ) {
         chatSessionManager.resetSession(cleanPhone);
         await this.sendWelcomeMenu(cleanPhone);
         return;
@@ -519,8 +534,8 @@ export class ChatFlowEngine {
     const confirmationMsg = orderService.formatOrderConfirmation(order, settings.whatsapp_group_link);
     await botsailorClient.sendTextMessage(phoneNumber, confirmationMsg);
 
-    // 2. Alert staff WhatsApp number immediately!
-    await this.notifyStaffNewOrder({
+    // 2. Alert staff WhatsApp number in background so customer receives their order confirmation instantly!
+    this.notifyStaffNewOrder({
       order,
       productName: product.name,
       variantDesc: variant ? [variant.color, variant.size].filter(Boolean).join(' - ') : undefined,
@@ -528,7 +543,9 @@ export class ChatFlowEngine {
       customerName: parsed.name,
       customerPhone: parsed.phone,
       deliveryAddress: parsed.address,
-    });
+    }).catch((err) =>
+      logger.error('Failed to dispatch staff order alert in background:', err.message)
+    );
   }
 
   /**

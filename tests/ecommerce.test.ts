@@ -226,6 +226,14 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     });
     session = chatSessionManager.getSession(staffUserPhone);
     assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Staff button must handover to support');
+
+    // Test tapping "📂 MENU" button while handed over to support
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: staffUserPhone,
+      text: '📂 MENU',
+    });
+    session = chatSessionManager.getSession(staffUserPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Tapping MENU button must resume shopping flow');
   });
 
   test('9. Hybrid Model: Post-Purchase Delivery Status Handler', async () => {

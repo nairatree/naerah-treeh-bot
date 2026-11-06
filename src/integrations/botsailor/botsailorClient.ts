@@ -130,6 +130,12 @@ export class BotSailorClient {
       return true;
     }
 
+    const errMessage = String(res?.data?.message || res?.message || '').toLowerCase();
+    if (errMessage.includes('24 hour') || errMessage.includes('outside 24')) {
+      logger.warn(`Interactive buttons skipped for ${cleaned}: User is outside WhatsApp 24-hour window.`);
+      return false;
+    }
+
     // Fallback: format buttons cleanly as numbered text
     const buttonHints = buttons.map((b, i) => `${i + 1}️⃣ *${b.text}*`).join('\n');
     return this.sendTextMessage(cleaned, `${bodyText}\n\n${buttonHints}`);
