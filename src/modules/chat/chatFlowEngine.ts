@@ -67,7 +67,7 @@ export class ChatFlowEngine {
 
     // 3. Check for Live Human Support Trigger
     if (
-      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'speak with staff', 'talk to human', 'human assistance', 'staff', 'customer care', 'call me'].some((k) =>
+      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'speak with staff', 'connect with our staff', 'connect with staff', 'connect to staff', 'connect staff', 'talk to human', 'human assistance', 'staff', 'customer care', 'call me'].some((k) =>
         lowerText.includes(k)
       )
     ) {
@@ -83,7 +83,7 @@ export class ChatFlowEngine {
     // 4. Human Support Handover Protection:
     // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
-      if (['menu', 'catalog', 'start', 'restart', 'reset'].includes(lowerText)) {
+      if (['menu', 'catalog', 'view catalog', 'see catalog', 'start', 'restart', 'reset'].includes(lowerText)) {
         chatSessionManager.resetSession(cleanPhone);
         await this.sendWelcomeMenu(cleanPhone);
         return;
@@ -93,9 +93,18 @@ export class ChatFlowEngine {
     }
 
     // 5. Check for Explicit Reset / Menu Commands
-    if (['menu', 'catalog', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset'].includes(lowerText)) {
+    if (['menu', 'catalog', 'view catalog', 'see catalog', 'view products', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset'].includes(lowerText)) {
       chatSessionManager.resetSession(cleanPhone);
       await this.sendWelcomeMenu(cleanPhone);
+      return;
+    }
+
+    // 5b. Check for "Enter Product Name" Button Tap
+    if (['enter product name', 'enter product', 'order a product', 'enter_product', 'enter name'].includes(lowerText)) {
+      await botsailorClient.sendTextMessage(
+        cleanPhone,
+        `🛍️ *What product would you like to order?*\n\nPlease reply with the product name (for example: *Chopping Board*, *Knapsack Sprayer*, *Spin Mop*).`
+      );
       return;
     }
 
@@ -147,15 +156,24 @@ export class ChatFlowEngine {
       }
     }
 
-    // 9. Smart 2-Line Greeting for Generic Greetings in IDLE (Hybrid Model)
+    // 9. Smart Greeting with Interactive Buttons (Hybrid Model)
     if (session.state === 'IDLE' && this.isStandaloneGreeting(cleanText)) {
       let greeting = `Good day! 👋 Welcome to Nairatee Stores.\n\n`;
-      greeting += `Are you looking to order a product, or would you like to speak with our staff?\n\n`;
-      greeting += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n`;
-      greeting += `👉 Reply *STAFF* for customer support\n`;
-      greeting += `👉 Reply *CATALOG* to view popular items`;
+      greeting += `Are you looking to order a product, or would you like me to connect you with our staff?\n\n`;
+      greeting += `👉 Reply with the product name to order (e.g. Chopping Board, Sprayer, Mop)\n`;
+      greeting += `👉 Reply STAFF to connect with our staff\n`;
+      greeting += `👉 Reply CATALOG to view popular items`;
 
-      await botsailorClient.sendTextMessage(cleanPhone, greeting);
+      await botsailorClient.sendQuickReplyButtons(
+        cleanPhone,
+        greeting,
+        [
+          { text: 'Enter Product Name', payload: 'enter_product' },
+          { text: 'Staff', payload: 'staff' },
+          { text: 'View Catalog', payload: 'catalog' },
+        ],
+        'Nairatee Stores'
+      );
       return;
     }
 
@@ -291,19 +309,20 @@ export class ChatFlowEngine {
    */
   async sendWelcomeMenu(phoneNumber: string): Promise<void> {
     const [categories, settings] = await Promise.all([catalogService.getCategories(), db.getStoreSettings()]);
-    let msg = `👋 *Welcome to ${settings.store_name || config.STORE_NAME}!* 🛍️\n\n`;
-    msg += `We deliver doorstep across Nigeria.\n\n`;
-    msg += `📂 *POPULAR CATEGORIES:*\n`;
+    let msg = `📂 *NAIRATEE STORES CATALOG & PRODUCTS* 🛍️\n\n`;
 
+    if (settings.whatsapp_group_link) {
+      msg += `📲 *Join our VIP WhatsApp Group to view all 500+ products with daily videos, photos & prices:*\n`;
+      msg += `${settings.whatsapp_group_link}\n\n`;
+    }
+
+    msg += `✨ *Popular Categories in Store:*\n`;
     categories.forEach((cat) => {
       msg += `• ${cat.icon_emoji || '📦'} *${cat.name}*\n`;
     });
 
-    msg += `\n🔍 *To order:* Simply type what you want (e.g. *"Chopping Board"*, *"Knapsack Sprayer"*, *"Spin Mop"*).\n`;
-
-    if (settings.whatsapp_group_link) {
-      msg += `\n📲 *Join our VIP WhatsApp Group for daily new arrivals:*\n${settings.whatsapp_group_link}`;
-    }
+    msg += `\n👉 *To order any product immediately:* Reply with the product name (e.g. *Chopping Board*, *Sprayer*, *Mop*)!\n`;
+    msg += `👉 Or reply *STAFF* to connect with our staff.`;
 
     await botsailorClient.sendTextMessage(phoneNumber, msg);
   }

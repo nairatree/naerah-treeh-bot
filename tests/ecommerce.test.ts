@@ -191,6 +191,14 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     session = chatSessionManager.getSession(greetingPhone);
     assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after smart greeting');
 
+    // Prospective buyer taps "Enter Product Name" button
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: greetingPhone,
+      text: 'Enter Product Name',
+    });
+    session = chatSessionManager.getSession(greetingPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE while prompting for product name');
+
     // Prospective buyer now replies with product name
     await chatFlowEngine.processInboundMessage({
       phoneNumber: greetingPhone,
@@ -198,6 +206,26 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     });
     session = chatSessionManager.getSession(greetingPhone);
     assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Advances to product variant selection');
+
+    // Test "View Catalog" button tap
+    const catalogUserPhone = '2348011998877';
+    chatSessionManager.resetSession(catalogUserPhone);
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: catalogUserPhone,
+      text: 'View Catalog',
+    });
+    session = chatSessionManager.getSession(catalogUserPhone);
+    assert.strictEqual(session.state, 'IDLE');
+
+    // Test "Staff" button tap
+    const staffUserPhone = '2348011998866';
+    chatSessionManager.resetSession(staffUserPhone);
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: staffUserPhone,
+      text: 'Staff',
+    });
+    session = chatSessionManager.getSession(staffUserPhone);
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Staff button must handover to support');
   });
 
   test('9. Hybrid Model: Post-Purchase Delivery Status Handler', async () => {
