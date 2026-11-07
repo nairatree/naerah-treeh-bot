@@ -78,8 +78,8 @@ describe('Nairatee Stores E-Commerce Chatbot Engine Tests', () => {
       await sb.from('product_variants').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       await sb.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     }
-    // Ensure master bot switch remains paused
-    await db.updateStoreSettings({ is_bot_active: false });
+    // Ensure master bot switch remains ON as requested by merchant
+    await db.updateStoreSettings({ is_bot_active: true });
   });
   test('1. Catalog Search & Short Punchy Multi-Variant Presentation', async () => {
     const results = await catalogService.search('chopping board');
@@ -469,5 +469,61 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Direct short query must trigger product presentation');
 
     await db.updateStoreSettings({ is_bot_active: false });
+  });
+
+  test('13. Meta Ads Trigger & Hello T-Bot / Teebot Name Greeting', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+
+    // 1. Customer initiates chat with "Hello T-Bot"
+    const tbotPhone = '2348044556677';
+    chatSessionManager.resetSession(tbotPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: tbotPhone,
+      text: 'Hello T-Bot',
+    });
+
+    let session = chatSessionManager.getSession(tbotPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after Hello T-Bot welcome greeting');
+
+    // 2. Customer initiates chat with "Teebot"
+    const teebotPhone = '2348044556688';
+    chatSessionManager.resetSession(teebotPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: teebotPhone,
+      text: 'Teebot',
+    });
+
+    session = chatSessionManager.getSession(teebotPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after Teebot welcome greeting');
+
+    // 3. Meta Ads Trigger: "I want to buy the chopping board you advertised"
+    const adBuyerPhone = '2348044556699';
+    chatSessionManager.resetSession(adBuyerPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: adBuyerPhone,
+      text: 'I want to buy the chopping board you advertised',
+    });
+
+    session = chatSessionManager.getSession(adBuyerPhone);
+    assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Ad prefilled text must match product and show variants');
+    assert.strictEqual(session.context.currentProduct?.name, 'Premium Wooden Chopping Board');
+
+    // 4. Meta Ads Trigger for Out-of-Stock / Unmatched Product: "I want to buy the luxury wristwatch you advertised"
+    const unavailableAdPhone = '2348044556600';
+    chatSessionManager.resetSession(unavailableAdPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: unavailableAdPhone,
+      text: 'I want to buy the luxury wristwatch you advertised',
+    });
+
+    session = chatSessionManager.getSession(unavailableAdPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Must stay IDLE and offer Unavailable buttons (Staff, VIP Group, Menu)');
+
+    // Ensure bot returns to merchant's intended state: ON!
+    await db.updateStoreSettings({ is_bot_active: true });
   });
 });

@@ -258,19 +258,24 @@ export class ChatFlowEngine {
       sessionContext.awaitingProductSearch = false;
     }
 
-    const words = cleanText.trim().split(/\s+/).filter(Boolean);
-    const isShortQuery = words.length <= 3;
-    const hasBuyingIntent = this.hasExplicitBuyingIntent(cleanText);
+    // 1. Check for Meta Ads / Advert Pre-filled Trigger (e.g. "I want to buy the chopping board you advertised")
+    const adProduct = this.extractProductFromAdMessage(cleanText);
+    const isAdTrigger = !!adProduct;
+    const targetQuery = adProduct || cleanText;
 
-    // Gate: Messages with more than 3 words MUST have explicit buying intent,
+    const words = targetQuery.trim().split(/\s+/).filter(Boolean);
+    const isShortQuery = words.length <= 3;
+    const hasBuyingIntent = isAdTrigger || this.hasExplicitBuyingIntent(cleanText);
+
+    // Gate: Messages with more than 3 words MUST have explicit buying intent or be an Ad trigger,
     // unless the customer was actively prompted for a product name via the "Enter Product Name" button
     if (!wasAwaitingSearch && !isShortQuery && !hasBuyingIntent) {
       logger.info(`[ANTI-INTERFERENCE] Ignoring non-buying conversational message from ${phoneNumber}: "${cleanText}"`);
       return;
     }
 
-    // Attempt catalog search
-    const results = await catalogService.search(cleanText);
+    // Attempt catalog search using the extracted product query or clean text
+    const results = await catalogService.search(targetQuery);
 
     if (results.length > 0) {
       // 1. Direct Product Match Found!
@@ -330,10 +335,11 @@ export class ChatFlowEngine {
     // 3. No Product Found: Check if inquiry was an intentional product search
     const isCasual = this.isCasualNonStoreMessage(cleanText);
 
-    // If customer was explicitly prompted for product name, or typed buying keywords, or entered a non-casual item search:
-    if (wasAwaitingSearch || hasBuyingIntent || (!isCasual && isShortQuery)) {
+    // If customer was explicitly prompted for product name, or arrived from Ad, or typed buying keywords, or entered a non-casual item search:
+    if (wasAwaitingSearch || isAdTrigger || hasBuyingIntent || (!isCasual && isShortQuery)) {
+      const displayItemName = adProduct || cleanText;
       let unavailableMsg = `😕 *Product Currently Unavailable*\n\n`;
-      unavailableMsg += `Sorry, we couldn't find an exact match for *"${cleanText}"* in our current stock right now.\n\n`;
+      unavailableMsg += `Sorry, we couldn't find an exact match for *"${displayItemName}"* in our current stock right now.\n\n`;
       unavailableMsg += `👉 You can speak with our *staff*, join our *VIP WhatsApp Group* to see our available items & daily restocks, or view our main menu.`;
 
       await botsailorClient.sendQuickReplyButtons(
@@ -763,12 +769,18 @@ export class ChatFlowEngine {
   }
 
   /**
-   * Smart Greeting Filter: Matches standalone greetings only
-   * (e.g. "Hi", "Hello", "Good morning", "Good afternoon", "Good day", etc.)
+   * Smart Greeting Filter: Matches standalone greetings and bot triggers
+   * (e.g. "Hello T-Bot", "Teebot", "Hi", "Hello", "Good morning", "Good afternoon", "Good day", etc.)
    * Casual non-store messages like "Good morning, hope the kids are fine?" or "Bro call me" are NOT standalone greetings.
    */
   isStandaloneGreeting(text: string): boolean {
-    const clean = text.toLowerCase().replace(/[^\w\s]/g, '').trim();
+    const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+
+    // Explicit "Hello T-Bot" / "Teebot" flow triggers
+    if (/\b(t\s*bot|teebot)\b/i.test(text)) {
+      return true;
+    }
+
     const greetings = [
       'hi',
       'hello',
@@ -792,6 +804,39 @@ export class ChatFlowEngine {
       'evening',
     ];
     return greetings.includes(clean);
+  }
+
+  /**
+   * Extracts target product name from Meta Ads / Advert pre-filled message formats:
+   * e.g. "I want to buy the chopping board you advertised" -> "chopping board"
+   * e.g. "I want to buy the knapsack sprayer you advertised" -> "knapsack sprayer"
+   * e.g. "I saw your ad for the electric kettle" -> "electric kettle"
+   */
+  extractProductFromAdMessage(text: string): string | null {
+    const clean = text.trim();
+
+    // 1. "I want to buy (the) [Product] you advertised"
+    const adPattern1 = /(?:i\s+want\s+to\s+buy|i\s+want\s+to\s+order|i\s+want|i\s+need)\s+(?:the\s+)?(.*?)(?:\s+you\s+advertised|\s+advertised|\s+i\s+saw\s+on\s+ad|\s+i\s+saw\s+on\s+facebook|\s+i\s+saw\s+on\s+instagram|\s+on\s+your\s+ad|\s+on\s+ad)/i;
+    const match1 = clean.match(adPattern1);
+    if (match1 && match1[1] && match1[1].trim().length >= 2) {
+      return match1[1].trim();
+    }
+
+    // 2. "I saw your ad for (the) [Product]" or "Saw your advert for (the) [Product]"
+    const adPattern2 = /(?:i\s+)?saw\s+your\s+(?:ad|advert|advertisement)\s+for\s+(?:the\s+)?(.*?)(?:\s+on\s+facebook|\s+on\s+instagram|\s+you\s+advertised|$)/i;
+    const match2 = clean.match(adPattern2);
+    if (match2 && match2[1] && match2[1].trim().length >= 2) {
+      return match2[1].trim();
+    }
+
+    // 3. "Interested in (the) [Product] you advertised"
+    const adPattern3 = /(?:i\s+am\s+|i'm\s+)?interested\s+in\s+(?:the\s+)?(.*?)(?:\s+you\s+advertised|\s+advertised|\s+i\s+saw|$)/i;
+    const match3 = clean.match(adPattern3);
+    if (match3 && match3[1] && match3[1].trim().length >= 2) {
+      return match3[1].trim();
+    }
+
+    return null;
   }
 
   /**

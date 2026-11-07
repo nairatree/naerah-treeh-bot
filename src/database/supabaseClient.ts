@@ -81,7 +81,8 @@ export const db = {
       'shall', 'should', 'how', 'much', 'many', 'what', 'where', 'when', 'who', 'why', 'bro', 'guys',
       'guy', 'dear', 'sir', 'ma', 'okay', 'ok', 'yes', 'no', 'hi', 'hello', 'hey', 'good', 'morning',
       'afternoon', 'evening', 'night', 'today', 'now', 'right', 'there', 'here', 'just', 'still', 'dey',
-      'abeg', 'pls', 'send', 'tell', 'show', 'give', 'hope', 'fine', 'call', 'see', 'around'
+      'abeg', 'pls', 'send', 'tell', 'show', 'give', 'hope', 'fine', 'call', 'see', 'around',
+      'advertised', 'advert', 'ad', 'saw', 'facebook', 'instagram', 'ads'
     ]);
 
     const keywords = cleanQuery
