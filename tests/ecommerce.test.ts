@@ -344,8 +344,8 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     session = chatSessionManager.getSession(unknownPhone);
     assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff after reassuring customer');
 
-    // Ensure bot stays in current merchant state
-    await db.updateStoreSettings({ is_bot_active: false });
+    // Ensure bot stays active
+    await db.updateStoreSettings({ is_bot_active: true });
   });
 
   test('10. Unavailable Product Search: Sends clean notice with Staff, VIP Group, and Menu buttons', async () => {
@@ -361,33 +361,73 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
 
     let session = chatSessionManager.getSession(userPhone);
     assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after unavailable product notification');
+    assert.strictEqual(session.context.lastPrompt, 'UNAVAILABLE');
+    assert.strictEqual(session.context.lastSearchedQuery, 'bluetooth speaker');
 
-    // Customer taps "Join VIP Group"
+    // Customer taps "Join VIP Group" (buttonPayload: 'group')
     await chatFlowEngine.processInboundMessage({
       phoneNumber: userPhone,
       text: 'Join VIP Group',
+      buttonPayload: 'group',
     });
     session = chatSessionManager.getSession(userPhone);
     assert.strictEqual(session.state, 'IDLE', 'Session stays IDLE after sending group link');
 
-    // Customer taps "Talk to Staff"
+    // Reset and trigger unavailable again
+    chatSessionManager.resetSession(userPhone);
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'I want bluetooth speaker',
+    });
+
+    // Customer taps "Talk to Staff" (buttonPayload: 'staff')
     await chatFlowEngine.processInboundMessage({
       phoneNumber: userPhone,
       text: 'Talk to Staff',
+      buttonPayload: 'staff',
     });
     session = chatSessionManager.getSession(userPhone);
-    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff');
+    assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Transfers to staff and alerts merchant');
 
-    // Customer taps "Main Menu"
+    // Customer taps "Main Menu" (buttonPayload: 'menu') while handed over
     await chatFlowEngine.processInboundMessage({
       phoneNumber: userPhone,
       text: 'Main Menu',
+      buttonPayload: 'menu',
     });
     session = chatSessionManager.getSession(userPhone);
-    assert.strictEqual(session.state, 'IDLE', 'Resumes catalog menu on Main Menu tap');
+    assert.strictEqual(session.state, 'IDLE', 'Resumes shopping flow on Main Menu tap');
 
-    // Ensure bot stays in paused state
-    await db.updateStoreSettings({ is_bot_active: false });
+    // Customer sends fallback numeric options: '2' for VIP group
+    chatSessionManager.resetSession(userPhone);
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'wireless earbuds',
+    });
+    assert.strictEqual(chatSessionManager.getSession(userPhone).context.lastPrompt, 'UNAVAILABLE');
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: '2',
+    });
+    assert.strictEqual(chatSessionManager.getSession(userPhone).state, 'IDLE');
+
+    // Customer sends fallback numeric options: '1' for Talk to Staff
+    chatSessionManager.resetSession(userPhone);
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: 'electric drone',
+    });
+    assert.strictEqual(chatSessionManager.getSession(userPhone).context.lastPrompt, 'UNAVAILABLE');
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: '1',
+    });
+    assert.strictEqual(chatSessionManager.getSession(userPhone).state, 'HANDED_OVER_TO_SUPPORT');
+
+    // Ensure bot stays active
+    await db.updateStoreSettings({ is_bot_active: true });
   });
 
   test('11. Solution 1: Past-Tense & Complaint Gate Intercepts "I ordered for a plate last week"', async () => {
@@ -429,7 +469,7 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     session = chatSessionManager.getSession(paidPhone);
     assert.strictEqual(session.state, 'HANDED_OVER_TO_SUPPORT', 'Must intercept payment follow-up and handover to staff');
 
-    await db.updateStoreSettings({ is_bot_active: false });
+    await db.updateStoreSettings({ is_bot_active: true });
   });
 
   test('12. Solution 1: Conversational Long-Sentence Gate vs Explicit Buying Intent', async () => {
@@ -468,7 +508,7 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     session = chatSessionManager.getSession(directPhone);
     assert.strictEqual(session.state, 'SELECTING_VARIANT', 'Direct short query must trigger product presentation');
 
-    await db.updateStoreSettings({ is_bot_active: false });
+    await db.updateStoreSettings({ is_bot_active: true });
   });
 
   test('13. Meta Ads Trigger & Hello T-Bot / Teebot Name Greeting', async () => {

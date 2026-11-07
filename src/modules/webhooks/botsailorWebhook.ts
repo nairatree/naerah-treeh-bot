@@ -31,8 +31,39 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
     return;
   }
 
+  // Extract interactive button payload or title (supports all WhatsApp & BotSailor formats)
+  const buttonPayload: string = (
+    payload.button_payload ||
+    payload.interactive?.button_reply?.id ||
+    payload.interactive?.button_reply?.payload ||
+    payload.message?.interactive?.button_reply?.id ||
+    payload.message?.interactive?.button_reply?.payload ||
+    payload.message?.button_reply?.id ||
+    payload.message?.button_reply?.payload ||
+    payload.button_id ||
+    payload.payload ||
+    payload.postback?.payload ||
+    payload.data?.payload ||
+    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.button_reply?.id ||
+    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.button_reply?.payload ||
+    ''
+  ).trim();
+
+  const buttonTitle: string = (
+    payload.interactive?.button_reply?.title ||
+    payload.message?.interactive?.button_reply?.title ||
+    payload.message?.button_reply?.title ||
+    payload.button_text ||
+    payload.button_reply?.title ||
+    payload.postback?.title ||
+    payload.data?.title ||
+    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.button_reply?.title ||
+    ''
+  ).trim();
+
   // Extract Text Content (Button clicks, list selection, text message, or caption)
-  let userText: string =
+  let userText: string = (
+    (typeof payload.message === 'string' ? payload.message : '') ||
     payload.message?.text ||
     payload.message?.caption ||
     payload.user_message ||
@@ -40,14 +71,13 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
     payload.text ||
     payload.caption ||
     payload.body ||
-    payload.payload ||
-    payload.button_text ||
-    payload.interactive?.button_reply?.title ||
+    buttonTitle ||
+    buttonPayload ||
     payload.interactive?.list_reply?.title ||
     payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body ||
-    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.button_reply?.title ||
     payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.list_reply?.title ||
-    '';
+    ''
+  ).trim();
 
   // Extract Media Attachment
   let mediaUrl: string | undefined =
@@ -65,7 +95,7 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
 
   // Extract media caption if userText is empty
   if (!userText && (payload.media_caption || payload.message?.caption)) {
-    userText = payload.media_caption || payload.message?.caption || '';
+    userText = (payload.media_caption || payload.message?.caption || '').trim();
   }
 
   // Acknowledge BotSailor immediately with 200 OK
@@ -76,6 +106,7 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
     await chatFlowEngine.processInboundMessage({
       phoneNumber,
       text: userText,
+      buttonPayload,
       mediaUrl,
       userName: payload.subscriber?.first_name || payload.first_name,
     });

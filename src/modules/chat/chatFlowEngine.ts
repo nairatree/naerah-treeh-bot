@@ -11,16 +11,18 @@ export class ChatFlowEngine {
   async processInboundMessage(params: {
     phoneNumber: string;
     text?: string;
+    buttonPayload?: string;
     mediaUrl?: string;
     mediaType?: 'image' | 'video' | 'document';
     userName?: string;
   }): Promise<void> {
-    const { phoneNumber, text = '', mediaUrl, mediaType = 'image', userName } = params;
+    const { phoneNumber, text = '', buttonPayload = '', mediaUrl, mediaType = 'image', userName } = params;
     const cleanPhone = phoneNumber.replace(/\D/g, '');
     const cleanText = text.trim();
     const lowerText = cleanText.toLowerCase();
+    const btnPayloadClean = (buttonPayload || '').trim().toLowerCase();
 
-    logger.info(`Processing message from ${cleanPhone}: "${cleanText}" (Media: ${mediaUrl ? 'Yes' : 'No'})`);
+    logger.info(`Processing message from ${cleanPhone}: "${cleanText}" (BtnPayload: "${btnPayloadClean}", Media: ${mediaUrl ? 'Yes' : 'No'})`);
 
     const settings = await db.getStoreSettings();
     const supportPhoneClean = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
@@ -83,12 +85,16 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 3. Check for Live Human Support Trigger
-    if (
+    // 3. Check for Live Human Support Trigger (Buttons, keywords, or fallback #1)
+    const isSupportTrigger =
+      btnPayloadClean === 'staff' ||
+      btnPayloadClean === 'support' ||
       ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'speak with staff', 'connect with our staff', 'connect with staff', 'connect to staff', 'connect staff', 'talk to human', 'human assistance', 'staff', 'customer care', 'call me'].some((k) =>
         lowerText.includes(k)
-      )
-    ) {
+      ) ||
+      (session.context.lastPrompt === 'UNAVAILABLE' && (lowerText === '1' || btnPayloadClean === '1'));
+
+    if (isSupportTrigger) {
       chatSessionManager.handoverToSupport(cleanPhone);
       await botsailorClient.sendQuickReplyButtons(
         cleanPhone,
@@ -106,31 +112,45 @@ export class ChatFlowEngine {
     }
 
     // 4. Human Support Handover Protection:
-    // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART
+    // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART or tap MENU button
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
       const cleanCmd = lowerText.replace(/[^\w\s]/g, '').trim();
-      if (
-        ['menu', 'catalog', 'view catalog', 'see catalog', 'start', 'restart', 'reset', 'main menu'].some((cmd) =>
+      const isResumeMenu =
+        btnPayloadClean === 'menu' ||
+        btnPayloadClean === 'main_menu' ||
+        ['menu', 'start', 'restart', 'reset', 'main menu'].some((cmd) =>
           cleanCmd.includes(cmd) || lowerText.includes(cmd)
-        )
-      ) {
+        );
+
+      if (isResumeMenu) {
         chatSessionManager.resetSession(cleanPhone);
-        await this.sendWelcomeMenu(cleanPhone);
+        await this.sendStartOfFlowPrompt(cleanPhone);
         return;
       }
       logger.info(`User ${cleanPhone} is in human staff mode. Ignoring message to let staff converse.`);
       return;
     }
 
-    // 5. Check for Explicit Reset / Menu Commands
-    if (['menu', 'catalog', 'view catalog', 'see catalog', 'view products', 'shop', 'store', 'products', 'all products', 'start', 'restart', 'reset', 'main menu'].includes(lowerText)) {
+    // 5. Check for Explicit Reset / Main Menu Commands (Takes user back to start of flow, NOT greeting)
+    const isMainMenuTrigger =
+      btnPayloadClean === 'menu' ||
+      btnPayloadClean === 'main_menu' ||
+      ['menu', 'main menu', 'start', 'restart', 'reset'].includes(lowerText) ||
+      (session.context.lastPrompt === 'UNAVAILABLE' && (lowerText === '3' || btnPayloadClean === '3'));
+
+    if (isMainMenuTrigger) {
       chatSessionManager.resetSession(cleanPhone);
-      await this.sendWelcomeMenu(cleanPhone);
+      await this.sendStartOfFlowPrompt(cleanPhone);
       return;
     }
 
     // 5b. Check for "Enter Product Name" Button Tap
-    if (['enter product name', 'enter product', 'order a product', 'enter_product', 'enter name'].includes(lowerText)) {
+    const isEnterProductTrigger =
+      btnPayloadClean === 'enter_product' ||
+      btnPayloadClean === 'enter product name' ||
+      ['enter product name', 'enter product', 'order a product', 'enter name'].includes(lowerText);
+
+    if (isEnterProductTrigger) {
       session.context.awaitingProductSearch = true;
       await botsailorClient.sendTextMessage(
         cleanPhone,
@@ -139,12 +159,18 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 6. Check for VIP Group Link Request (across any state)
-    if (['group', 'vip', 'vip group', 'community', 'join group', 'whatsapp group', 'link', 'join vip group'].includes(lowerText)) {
+    // 6. Check for VIP Group Link Request / Catalog View (across any state)
+    const isVipGroupTrigger =
+      btnPayloadClean === 'group' ||
+      btnPayloadClean === 'vip' ||
+      btnPayloadClean === 'catalog' ||
+      btnPayloadClean === 'view_catalog' ||
+      ['catalog', 'view catalog', 'see catalog', 'group', 'vip', 'vip group', 'community', 'join group', 'whatsapp group', 'link', 'join vip group', 'join our vip group'].some((kw) => lowerText.includes(kw)) ||
+      (session.context.lastPrompt === 'UNAVAILABLE' && (lowerText === '2' || btnPayloadClean === '2'));
+
+    if (isVipGroupTrigger) {
       chatSessionManager.resetSession(cleanPhone);
-      let groupMsg = `📲 *Join our VIP WhatsApp Community:*\n${settings.whatsapp_group_link || 'https://chat.whatsapp.com/...'}\n\n`;
-      groupMsg += `New arrivals, product videos & wholesale deals are posted daily! 🛍️✨`;
-      await botsailorClient.sendTextMessage(cleanPhone, groupMsg);
+      await this.sendWelcomeMenu(cleanPhone);
       return;
     }
 
@@ -160,7 +186,7 @@ export class ChatFlowEngine {
     }
 
     // 8. Handle "YES" / "ORDER" from Follow-up while in IDLE
-    if (session.state === 'IDLE' && (lowerText === 'yes' || lowerText === '1' || lowerText === 'order' || lowerText === 'i want to buy')) {
+    if (session.state === 'IDLE' && (lowerText === 'yes' || lowerText === 'order' || lowerText === 'i want to buy' || lowerText === 'proceed')) {
       const lead = await followupService.getLead(cleanPhone);
       if (lead && lead.productName) {
         const results = await catalogService.search(lead.productName);
@@ -191,8 +217,8 @@ export class ChatFlowEngine {
     if (session.state === 'IDLE' && this.isStandaloneGreeting(cleanText)) {
       let greeting = `Good day! 👋 Welcome to *Nairatee Stores*.\n\n`;
       greeting += `Are you looking to order a product, or would you like me to connect you with our staff?\n\n`;
-      greeting += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n`;
-      greeting += `👉 Reply *STAFF* to connect with our staff\n`;
+      greeting += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n\n`;
+      greeting += `👉 Reply *STAFF* to connect with our staff\n\n`;
       greeting += `👉 Reply *CATALOG* to view popular items`;
 
       await botsailorClient.sendQuickReplyButtons(
@@ -261,7 +287,8 @@ export class ChatFlowEngine {
     // 1. Check for Meta Ads / Advert Pre-filled Trigger (e.g. "I want to buy the chopping board you advertised")
     const adProduct = this.extractProductFromAdMessage(cleanText);
     const isAdTrigger = !!adProduct;
-    const targetQuery = adProduct || cleanText;
+    const cleanedQuery = this.cleanSearchQuery(cleanText);
+    const targetQuery = adProduct || cleanedQuery || cleanText;
 
     const words = targetQuery.trim().split(/\s+/).filter(Boolean);
     const isShortQuery = words.length <= 3;
@@ -326,9 +353,7 @@ export class ChatFlowEngine {
 
     // 2. Check if user is asking to join group or see catalog
     if (['join', 'group', 'vip', 'more items', 'other items', 'catalog', 'see products'].some((k) => lowerText.includes(k))) {
-      let groupMsg = `📲 *Join our VIP WhatsApp Group:*\n${settings.whatsapp_group_link || 'https://chat.whatsapp.com/...'}\n\n`;
-      groupMsg += `Browse 500+ items with daily videos, photos & wholesale prices! 🛍️`;
-      await botsailorClient.sendTextMessage(phoneNumber, groupMsg);
+      await this.sendWelcomeMenu(phoneNumber);
       return;
     }
 
@@ -337,10 +362,15 @@ export class ChatFlowEngine {
 
     // If customer was explicitly prompted for product name, or arrived from Ad, or typed buying keywords, or entered a non-casual item search:
     if (wasAwaitingSearch || isAdTrigger || hasBuyingIntent || (!isCasual && isShortQuery)) {
-      const displayItemName = adProduct || cleanText;
+      const displayItemName = targetQuery || adProduct || cleanText;
+      if (sessionContext) {
+        sessionContext.lastPrompt = 'UNAVAILABLE';
+        sessionContext.lastSearchedQuery = displayItemName;
+      }
+
       let unavailableMsg = `😕 *Product Currently Unavailable*\n\n`;
       unavailableMsg += `Sorry, we couldn't find an exact match for *"${displayItemName}"* in our current stock right now.\n\n`;
-      unavailableMsg += `👉 You can speak with our *staff*, join our *VIP WhatsApp Group* to see our available items & daily restocks, or view our main menu.`;
+      unavailableMsg += `👉 You can speak with our *staff*, join our *VIP WhatsApp Group* to see our available items & daily restocks, or return to our main menu.`;
 
       await botsailorClient.sendQuickReplyButtons(
         phoneNumber,
@@ -361,26 +391,49 @@ export class ChatFlowEngine {
   }
 
   /**
-   * Welcome Menu & Introduction (Short & Nigerian-friendly)
+   * VIP WhatsApp Group & Catalog Prompt (Clean, spaced, no bulky categories)
    */
   async sendWelcomeMenu(phoneNumber: string): Promise<void> {
-    const [categories, settings] = await Promise.all([catalogService.getCategories(), db.getStoreSettings()]);
-    let msg = `📂 *NAIRATEE STORES CATALOG & PRODUCTS* 🛍️\n\n`;
+    const settings = await db.getStoreSettings();
+    const groupLink = settings.whatsapp_group_link || 'https://chat.whatsapp.com/IPHjsm4NALtC93ioNvQc8O?s=cl&p=i&mlu=4&ilr=4&iam=2';
 
-    if (settings.whatsapp_group_link) {
-      msg += `📲 *Join our VIP WhatsApp Group to view all 500+ products with daily videos, photos & prices:*\n`;
-      msg += `${settings.whatsapp_group_link}\n\n`;
-    }
+    let msg = `📲 *Join our VIP WhatsApp group to view all 500+ products with daily videos, photos & prices:*\n`;
+    msg += `${groupLink}\n\n`;
+    msg += `👉 *To order any product immediately:* Reply with the product name (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n\n`;
+    msg += `👉 *Or reply STAFF* to connect with our staff.`;
 
-    msg += `✨ *Popular Categories in Store:*\n`;
-    categories.forEach((cat) => {
-      msg += `• ${cat.icon_emoji || '📦'} *${cat.name}*\n`;
-    });
+    await botsailorClient.sendQuickReplyButtons(
+      phoneNumber,
+      msg,
+      [
+        { text: 'Enter Product Name', payload: 'enter_product' },
+        { text: 'Staff', payload: 'staff' },
+        { text: 'Main Menu', payload: 'menu' },
+      ],
+      'Nairatee Stores'
+    );
+  }
 
-    msg += `\n👉 *To order any product immediately:* Reply with the product name (e.g. *Chopping Board*, *Sprayer*, *Mop*)!\n`;
-    msg += `👉 Or reply *STAFF* to connect with our staff.`;
+  /**
+   * Start-of-Flow Prompt (for Main Menu reset — NO "Good day! Welcome" greeting banner)
+   */
+  async sendStartOfFlowPrompt(phoneNumber: string): Promise<void> {
+    let msg = `🛍️ *How can we help you today?*\n\n`;
+    msg += `Are you looking to order a product, or would you like me to connect you with our staff?\n\n`;
+    msg += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n\n`;
+    msg += `👉 Reply *STAFF* to connect with our staff\n\n`;
+    msg += `👉 Reply *CATALOG* to view popular items`;
 
-    await botsailorClient.sendTextMessage(phoneNumber, msg);
+    await botsailorClient.sendQuickReplyButtons(
+      phoneNumber,
+      msg,
+      [
+        { text: 'Enter Product Name', payload: 'enter_product' },
+        { text: 'Staff', payload: 'staff' },
+        { text: 'View Catalog', payload: 'catalog' },
+      ],
+      'Nairatee Stores'
+    );
   }
 
   /**
@@ -474,7 +527,7 @@ export class ChatFlowEngine {
 
     if (!product) {
       chatSessionManager.resetSession(phoneNumber);
-      await this.sendWelcomeMenu(phoneNumber);
+      await this.sendStartOfFlowPrompt(phoneNumber);
       return;
     }
 
@@ -528,7 +581,7 @@ export class ChatFlowEngine {
 
     if (!product) {
       chatSessionManager.resetSession(phoneNumber);
-      await this.sendWelcomeMenu(phoneNumber);
+      await this.sendStartOfFlowPrompt(phoneNumber);
       return;
     }
 
@@ -603,10 +656,12 @@ export class ChatFlowEngine {
   }): Promise<void> {
     try {
       const settings = await db.getStoreSettings();
-      const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
+      let supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
       if (!supportPhone || supportPhone === '2348000000000') {
-        logger.warn('Staff alert not sent: No valid support phone configured in store settings yet.');
-        return;
+        supportPhone = '2348103949939';
+      }
+      if (supportPhone.startsWith('0') && supportPhone.length === 11) {
+        supportPhone = '234' + supportPhone.substring(1);
       }
 
       const totalFormatted = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(params.order.total_amount);
@@ -708,19 +763,23 @@ export class ChatFlowEngine {
   async notifySupportTeam(customerPhone: string, session: any): Promise<void> {
     try {
       const settings = await db.getStoreSettings();
-      const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
+      let supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
       if (!supportPhone || supportPhone === '2348000000000') {
-        logger.warn('Support alert not sent: No valid support phone configured in store settings yet.');
-        return;
+        supportPhone = '2348103949939';
+      }
+      if (supportPhone.startsWith('0') && supportPhone.length === 11) {
+        supportPhone = '234' + supportPhone.substring(1);
       }
 
-      const item = session.context.currentProduct?.name || 'Browsing Catalog';
-      const variant = session.context.selectedVariant
+      const item = session?.context?.currentProduct?.name
+        || (session?.context?.lastSearchedQuery ? `"${session.context.lastSearchedQuery}" (Requested item - Out of stock / Unavailable)` : 'Browsing Catalog');
+
+      const variant = session?.context?.selectedVariant
         ? [session.context.selectedVariant.color, session.context.selectedVariant.size].filter(Boolean).join(' - ')
         : 'None selected yet';
 
       let alert = `🚨 *LIVE CUSTOMER SUPPORT REQUEST!* 🚨\n\n`;
-      alert += `A customer requested human staff assistance on WhatsApp:\n`;
+      alert += `A customer requested human staff assistance on WhatsApp:\n\n`;
       alert += `• *Customer Phone:* +${customerPhone}\n`;
       alert += `• *Product of Interest:* ${item}\n`;
       alert += `• *Selected Variant:* ${variant}\n\n`;
@@ -743,8 +802,13 @@ export class ChatFlowEngine {
   }): Promise<void> {
     try {
       const settings = await db.getStoreSettings();
-      const supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
-      if (!supportPhone || supportPhone === '2348000000000') return;
+      let supportPhone = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
+      if (!supportPhone || supportPhone === '2348000000000') {
+        supportPhone = '2348103949939';
+      }
+      if (supportPhone.startsWith('0') && supportPhone.length === 11) {
+        supportPhone = '234' + supportPhone.substring(1);
+      }
 
       let alert = params.order
         ? `🚚 *CUSTOMER CHECKING DELIVERY / ORDER STATUS!* 🚚\n\n`
@@ -837,6 +901,20 @@ export class ChatFlowEngine {
     }
 
     return null;
+  }
+
+  /**
+   * Cleans natural language buying prefixes and suffixes to extract raw product query
+   * e.g. "I want bluetooth speaker" -> "bluetooth speaker"
+   * e.g. "Do you have knapsack sprayer?" -> "knapsack sprayer"
+   */
+  cleanSearchQuery(text: string): string {
+    let clean = text.trim();
+    // Strip common conversational buying prefixes
+    clean = clean.replace(/^(?:hello|hi|hey|good\s+day|please|pls)?\s*(?:do\s+you\s+have|have\s+you|i\s+want\s+to\s+buy|i\s+want\s+to\s+order|i\s+want|i\s+need|how\s+much\s+is|how\s+much\s+for|what\s+is\s+the\s+price\s+of|price\s+of|cost\s+of|looking\s+for|give\s+me)\s+(?:the\s+)?/i, '');
+    // Strip common conversational suffixes
+    clean = clean.replace(/\s+(?:you\s+advertised|advertised|i\s+saw\s+on\s+(?:facebook|instagram|ad)|on\s+(?:your\s+)?ad|available|in\s+stock)\??$/i, '');
+    return clean.trim();
   }
 
   /**
