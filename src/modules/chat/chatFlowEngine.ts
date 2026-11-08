@@ -20,6 +20,7 @@ export class ChatFlowEngine {
     const cleanPhone = phoneNumber.replace(/\D/g, '');
     const cleanText = text.trim();
     const lowerText = cleanText.toLowerCase();
+    const cleanLower = lowerText;
     const btnPayloadClean = (buttonPayload || '').trim().toLowerCase();
 
     logger.info(`Processing message from ${cleanPhone}: "${cleanText}" (BtnPayload: "${btnPayloadClean}", Media: ${mediaUrl ? 'Yes' : 'No'})`);
@@ -43,6 +44,29 @@ export class ChatFlowEngine {
     // 0. MASTER KILLSWITCH: If bot is turned OFF, stay 100% silent for shoppers!
     if (settings.is_bot_active === false) {
       logger.info(`[KILLSWITCH ACTIVE] Bot is currently PAUSED. Silently ignoring message from ${cleanPhone}.`);
+      return;
+    }
+
+    // LAYER 2: Automatic Human Takeover & Bot Auto-Mute Check
+    // When a human agent has taken over the chat, the bot remains 100% silent unless customer explicitly types a resume command
+    if (chatSessionManager.isHumanTakeoverActive(cleanPhone)) {
+      const isBotResumeCommand =
+        btnPayloadClean === 'menu' ||
+        btnPayloadClean === 'start' ||
+        btnPayloadClean === 'restart' ||
+        ['menu', 'start', 'restart', 'reset', 'bot', 't-bot', 'teebot', 'tbot', 'hello t-bot', 'hello teebot'].some((cmd) =>
+          cleanLower === cmd || cleanLower.includes(cmd)
+        );
+
+      if (isBotResumeCommand) {
+        logger.info(`[HUMAN TAKEOVER] Customer ${cleanPhone} explicitly typed resume command "${cleanText}". Unpausing bot.`);
+        chatSessionManager.clearHumanTakeover(cleanPhone);
+        chatSessionManager.resetSession(cleanPhone);
+        await this.sendStartOfFlowPrompt(cleanPhone);
+        return;
+      }
+
+      logger.info(`[HUMAN TAKEOVER ACTIVE] Customer ${cleanPhone} is in human agent takeover mode. Sent: "${cleanText}". Bot remaining 100% silent.`);
       return;
     }
 
@@ -123,6 +147,7 @@ export class ChatFlowEngine {
         );
 
       if (isResumeMenu) {
+        chatSessionManager.clearHumanTakeover(cleanPhone);
         chatSessionManager.resetSession(cleanPhone);
         await this.sendStartOfFlowPrompt(cleanPhone);
         return;

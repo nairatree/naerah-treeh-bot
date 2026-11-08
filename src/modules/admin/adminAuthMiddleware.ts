@@ -6,6 +6,14 @@ export function adminAuthMiddleware(req: Request, res: Response, next: NextFunct
   const queryKey = req.query.api_key as string;
   const providedKey = authHeader ? authHeader.replace(/^Bearer\s+/i, '') : queryKey;
 
+  // Emergency Bot Status endpoints can be queried or toggled directly or with valid key
+  if (req.path.endsWith('/bot-status') || req.path === '/bot-status') {
+    if (!providedKey || providedKey === config.ADMIN_API_KEY) {
+      next();
+      return;
+    }
+  }
+
   if (!providedKey || providedKey !== config.ADMIN_API_KEY) {
     res.status(401).json({
       error: 'Unauthorized',

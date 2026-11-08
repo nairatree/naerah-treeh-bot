@@ -348,6 +348,42 @@
       border-top: 1px solid var(--card-border);
       gap: 10px;
     }
+
+    /* Mobile Responsive Optimizations for Emergency 1-Tap Killswitch */
+    @media (max-width: 768px) {
+      header {
+        padding: 12px 16px;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+      }
+      .brand {
+        justify-content: space-between;
+      }
+      .emergency-killswitch-bar {
+        width: 100% !important;
+        justify-content: space-between !important;
+        padding: 10px 14px !important;
+      }
+      .emergency-killswitch-bar button {
+        min-height: 42px !important;
+        padding: 8px 18px !important;
+        font-size: 13px !important;
+      }
+      .header-actions {
+        overflow-x: auto;
+        padding-bottom: 4px;
+        width: 100%;
+        justify-content: flex-start;
+      }
+      .nav-tabs {
+        flex-wrap: nowrap;
+        white-space: nowrap;
+      }
+      main {
+        padding: 16px 12px !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -361,8 +397,8 @@
       </div>
     </div>
 
-    <!-- MASTER BOT KILLSWITCH IN HEADER -->
-    <div style="display: flex; align-items: center; gap: 12px; background: #0f172a; padding: 6px 14px; border-radius: 12px; border: 1px solid var(--card-border);">
+    <!-- MASTER BOT KILLSWITCH IN HEADER (Mobile Optimized 1-Tap Toggle) -->
+    <div class="emergency-killswitch-bar" style="display: flex; align-items: center; gap: 12px; background: #0f172a; padding: 6px 14px; border-radius: 12px; border: 1px solid var(--card-border);">
       <div id="bot-status-indicator" style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;">
         <span id="bot-status-dot" style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444; display: inline-block;"></span>
         <span id="bot-status-text" style="color: #f87171;">BOT PAUSED</span>

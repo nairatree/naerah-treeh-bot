@@ -20,6 +20,13 @@ adminRouter.get('/settings', adminController.getSettings);
 adminRouter.post('/settings', adminController.updateSettings);
 adminRouter.post('/toggle-bot', adminController.toggleBotStatus);
 
+// LAYER 3 & LAYER 2 Control Endpoints
+adminRouter.get('/bot-status', adminController.getBotStatus);
+adminRouter.post('/bot-status', adminController.setBotStatus);
+adminRouter.get('/human-takeover', adminController.getHumanTakeovers);
+adminRouter.post('/human-takeover/clear', adminController.clearHumanTakeover);
+adminRouter.delete('/human-takeover/:phone', adminController.clearHumanTakeover);
+
 adminRouter.get('/leads', adminController.getLeads);
 adminRouter.post('/leads/followup', adminController.triggerFollowups);
 

@@ -29,8 +29,9 @@ app.get('/api/webhook', (req, res) => {
 app.post('/api/webhook', handleBotSailorWebhook);
 app.post('/webhook', handleBotSailorWebhook);
 
-// Admin Control REST API
+// Admin Control REST API (Supports both /api/admin and /api/v1/admin)
 app.use('/api/admin', adminRouter);
+app.use('/api/v1/admin', adminRouter);
 
 // Health Check & Diagnostic Endpoint
 app.get('/health', async (req, res) => {

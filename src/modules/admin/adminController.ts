@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { db } from '../../database/supabaseClient.ts';
 import { catalogService } from '../catalog/catalogService.ts';
 import { chatFlowEngine } from '../chat/chatFlowEngine.ts';
+import { chatSessionManager } from '../chat/chatSessionManager.ts';
 import { followupService } from '../followup/followupService.ts';
 import { config } from '../../config/environment.ts';
 import { logger } from '../../utils/logger.ts';
@@ -177,10 +178,66 @@ export const adminController = {
       await db.updateStoreSettings({ is_bot_active: newStatus });
       const updated = await db.getStoreSettings();
       logger.info(`Bot status toggled by admin to: ${updated.is_bot_active ? 'ACTIVE' : 'PAUSED'}`);
-      res.json({ status: 'success', is_bot_active: updated.is_bot_active });
+      res.json({ status: 'success', is_bot_active: updated.is_bot_active, isBotActive: updated.is_bot_active });
     } catch (err: any) {
       logger.error('Failed to toggle bot status:', err.message);
       res.status(500).json({ error: 'Failed to toggle bot status' });
+    }
+  },
+
+  /**
+   * LAYER 3: Standard Bot Status Endpoints
+   */
+  async getBotStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const settings = await db.getStoreSettings();
+      res.json({ isBotActive: settings.is_bot_active !== false });
+    } catch (err: any) {
+      logger.error('Failed to get bot status:', err.message);
+      res.status(500).json({ error: 'Failed to get bot status' });
+    }
+  },
+
+  async setBotStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const { active, isBotActive } = req.body;
+      const targetState = typeof active === 'boolean'
+        ? active
+        : (typeof isBotActive === 'boolean' ? isBotActive : true);
+
+      await db.updateStoreSettings({ is_bot_active: targetState });
+      const updated = await db.getStoreSettings();
+      logger.info(`Master bot status updated via API: isBotActive=${updated.is_bot_active}`);
+      res.json({ isBotActive: updated.is_bot_active !== false });
+    } catch (err: any) {
+      logger.error('Failed to set bot status:', err.message);
+      res.status(500).json({ error: 'Failed to update bot status' });
+    }
+  },
+
+  /**
+   * LAYER 2: Human Takeover Management Endpoints
+   */
+  async getHumanTakeovers(req: Request, res: Response): Promise<void> {
+    try {
+      const takeovers = chatSessionManager.getActiveHumanTakeovers();
+      res.json({ takeovers });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to retrieve human takeovers' });
+    }
+  },
+
+  async clearHumanTakeover(req: Request, res: Response): Promise<void> {
+    try {
+      const targetPhone = req.body.phone || req.body.phoneNumber || req.params.phone;
+      if (!targetPhone) {
+        res.status(400).json({ error: 'Customer phone number required' });
+        return;
+      }
+      chatSessionManager.clearHumanTakeover(targetPhone);
+      res.json({ status: 'success', message: `Human takeover cleared for ${targetPhone}` });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to clear human takeover' });
     }
   },
 
