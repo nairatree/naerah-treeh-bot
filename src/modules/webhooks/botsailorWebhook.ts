@@ -85,11 +85,11 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
     ''
   ).toLowerCase().trim();
 
-  if (['protocol', 'reaction', 'ephemeral', 'revoke', 'deleted', 'notification'].includes(msgType)) {
+  if (['protocol', 'reaction', 'ephemeral', 'revoke', 'deleted', 'notification', 'edit', 'edited'].includes(msgType)) {
     return true;
   }
 
-  // 2. Protocol message object (WhatsApp Cloud API / Baileys format)
+  // 2. Protocol message object (WhatsApp Cloud API / Baileys format: REVOKE, MESSAGE_EDIT)
   const protocolMsg =
     payload.protocolMessage ||
     payload.message?.protocolMessage ||
@@ -100,11 +100,20 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
 
   // 3. Action / Event names
   const action = String(payload.action || payload.event || payload.event_type || '').toLowerCase().trim();
-  if (action === 'revoke' || action === 'delete' || action === 'message_revoke' || action === 'message_deleted') {
+  if ([
+    'revoke',
+    'delete',
+    'message_revoke',
+    'message_deleted',
+    'edit',
+    'edited',
+    'message_edit',
+    'message_edited',
+  ].includes(action)) {
     return true;
   }
 
-  // 4. BotSailor attachment revoke tokens in any text field
+  // 4. BotSailor attachment revoke & edit tokens in any text field
   const rawFields = [
     typeof payload.message === 'string' ? payload.message : '',
     typeof payload.text === 'string' ? payload.text : '',
@@ -119,6 +128,8 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
     const lower = field.toLowerCase().trim();
     if (
       lower.includes('#attachment:revoke#') ||
+      lower.includes('#attachment:edit#') ||
+      lower.includes('#attachment:edited#') ||
       lower.includes('revoke#') ||
       lower === 'revoke' ||
       lower.includes('deleted this message') ||
@@ -145,9 +156,11 @@ export function sanitizeBotSailorText(rawText: string): {
 
   const trimmed = rawText.trim();
 
-  // 1. Detect revoke/deleted event
+  // 1. Detect revoke/deleted/edited event
   if (
     trimmed.includes('#ATTACHMENT:revoke#') ||
+    trimmed.includes('#ATTACHMENT:edit#') ||
+    trimmed.includes('#ATTACHMENT:edited#') ||
     trimmed.toLowerCase().includes('revoke#') ||
     trimmed.toLowerCase() === 'revoke' ||
     trimmed.toLowerCase().includes('deleted this message') ||
@@ -164,7 +177,11 @@ export function sanitizeBotSailorText(rawText: string): {
     const attachMatch = trimmed.match(/#ATTACHMENT:([^#]+)#/i);
     const attachToken = attachMatch ? attachMatch[1].trim() : '';
 
-    if (attachToken.toLowerCase() === 'revoke') {
+    if (
+      attachToken.toLowerCase() === 'revoke' ||
+      attachToken.toLowerCase() === 'edit' ||
+      attachToken.toLowerCase() === 'edited'
+    ) {
       return { cleanText: '', isRevoke: true };
     }
 

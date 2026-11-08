@@ -970,13 +970,20 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.strictEqual(isProtocolOrRevokeEvent({ text: 'revoke' }), true);
     assert.strictEqual(isProtocolOrRevokeEvent({ type: 'protocol' }), true);
     assert.strictEqual(isProtocolOrRevokeEvent({ type: 'reaction' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ type: 'edit' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ event: 'message_edit' }), true);
     assert.strictEqual(isProtocolOrRevokeEvent({ message: 'You deleted this message' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ message: '#ATTACHMENT:edit# |caption:new text' }), true);
     assert.strictEqual(isProtocolOrRevokeEvent({ message: 'I want to buy chopping board' }), false);
 
     // 2. Verify sanitizeBotSailorText cleanly extracts revoke status and strips wrappers
     const revokeSanitized = sanitizeBotSailorText('#ATTACHMENT:revoke# |caption:');
     assert.strictEqual(revokeSanitized.isRevoke, true);
     assert.strictEqual(revokeSanitized.cleanText, '');
+
+    const editSanitized = sanitizeBotSailorText('#ATTACHMENT:edit# |caption:updated');
+    assert.strictEqual(editSanitized.isRevoke, true);
+    assert.strictEqual(editSanitized.cleanText, '');
 
     const imageSanitized = sanitizeBotSailorText('#ATTACHMENT:https://example.com/item.jpg# |caption:How much is this?');
     assert.strictEqual(imageSanitized.isRevoke, false);
