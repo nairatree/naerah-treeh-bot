@@ -327,7 +327,7 @@ export class ChatFlowEngine {
 
     // 9. Smart Greeting with Interactive Buttons (Hybrid Model)
     if (session.state === 'IDLE' && this.isStandaloneGreeting(cleanText)) {
-      let greeting = `Good day! 👋 Welcome to *Nairatee Stores*.\n\n`;
+      let greeting = `Good day! 👋 Welcome to *NairaTree Stores*.\n\n`;
       greeting += `Are you looking to order a product, or would you like me to connect you with our staff?\n\n`;
       greeting += `👉 Reply with the *product name* to order (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n\n`;
       greeting += `👉 Reply *STAFF* to connect with our staff\n\n`;
@@ -341,7 +341,7 @@ export class ChatFlowEngine {
           { text: 'Staff', payload: 'staff' },
           { text: 'View Catalog', payload: 'catalog' },
         ],
-        'Nairatee Stores'
+        'NairaTree Stores'
       );
       return;
     }
@@ -498,7 +498,7 @@ export class ChatFlowEngine {
           { text: 'Join VIP Group', payload: 'group' },
           { text: 'Main Menu', payload: 'menu' },
         ],
-        'Nairatee Stores'
+        'NairaTree Stores'
       );
       return;
     }
@@ -528,7 +528,7 @@ export class ChatFlowEngine {
         { text: 'Staff', payload: 'staff' },
         { text: 'Main Menu', payload: 'menu' },
       ],
-      'Nairatee Stores'
+      'NairaTree Stores'
     );
   }
 
@@ -550,7 +550,7 @@ export class ChatFlowEngine {
         { text: 'Staff', payload: 'staff' },
         { text: 'View Catalog', payload: 'catalog' },
       ],
-      'Nairatee Stores'
+      'NairaTree Stores'
     );
   }
 
@@ -985,8 +985,8 @@ export class ChatFlowEngine {
       return true;
     }
 
-    // Match single greetings or common combinations like "hello good morning", "hi good day", "good morning nairatee"
-    const greetingComboPattern = /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|day|greetings|howdy|wassup|whatsup|whats\s+up|yo)(?:\s+(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|day|nairatee|stores|bot|t\s*bot|teebot))*\s*$/i;
+    // Match single greetings or common combinations like "hello good morning", "hi good day", "good morning nairatree"
+    const greetingComboPattern = /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|day|greetings|howdy|wassup|whatsup|whats\s+up|yo)(?:\s+(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|day|nairatree|nairatee|stores|bot|t\s*bot|teebot))*\s*$/i;
     if (greetingComboPattern.test(clean)) {
       return true;
     }
@@ -1005,6 +1005,10 @@ export class ChatFlowEngine {
       'whats up',
       'yo',
       'greetings',
+      'hi nairatree',
+      'hello nairatree',
+      'good morning nairatree',
+      'good day nairatree',
       'hi nairatee',
       'hello nairatee',
       'good morning nairatee',
@@ -1156,7 +1160,7 @@ export class ChatFlowEngine {
         { text: 'Enter Product Name', payload: 'enter_product' },
         { text: 'Main Menu', payload: 'menu' },
       ],
-      'Nairatee Stores'
+      'NairaTree Stores'
     );
   }
 

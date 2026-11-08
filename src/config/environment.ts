@@ -21,10 +21,10 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z.string().default('mock-supabase-anon-key'),
   
   // Store Branding & Financial Details
-  STORE_NAME: z.string().default('Nairatee Stores'),
+  STORE_NAME: z.string().default('NairaTree Stores'),
   BANK_NAME: z.string().default('Access Bank'),
   BANK_ACCOUNT_NUMBER: z.string().default('0123456789'),
-  BANK_ACCOUNT_NAME: z.string().default('Nairatee Stores Enterprise'),
+  BANK_ACCOUNT_NAME: z.string().default('NairaTree Stores Enterprise'),
   SUPPORT_PHONE_NUMBER: z.string().default('2348000000000'),
   
   // Authorized Admin Phones (comma-separated, can use /add command on WhatsApp)

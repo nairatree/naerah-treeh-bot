@@ -17,7 +17,7 @@ import { systemSettings } from '../src/modules/system/systemSettings.ts';
 import { db } from '../src/database/supabaseClient.ts';
 import { config } from '../src/config/environment.ts';
 
-describe('Nairatee Stores E-Commerce Chatbot Engine Tests', () => {
+describe('NairaTree Stores E-Commerce Chatbot Engine Tests', () => {
   before(async () => {
     // Seed fresh test products and order
     await db.createProduct(
