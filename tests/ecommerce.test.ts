@@ -751,4 +751,81 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     chatSessionManager.clearHumanTakeover(phone);
     assert.strictEqual(chatSessionManager.isHumanTakeoverActive(phone), false);
   });
+
+  test('19. Photo Search Assistant: Handles Screenshots, Generic Inquiries & Passes Photo to Staff', async () => {
+    const shopperPhone = '2348088990011';
+    chatSessionManager.resetSession(shopperPhone);
+
+    // Scenario A: Customer sends screenshot without text
+    const screenshotUrl = 'https://example.com/ad-screenshot-123.jpg';
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone,
+      text: '',
+      mediaUrl: screenshotUrl,
+    });
+
+    const sessionA = chatSessionManager.getSession(shopperPhone);
+    assert.strictEqual(sessionA.context.lastSentMediaUrl, screenshotUrl);
+    assert.strictEqual(sessionA.context.lastPrompt, 'PHOTO_INQUIRY');
+
+    // Scenario B: Customer taps "Talk to Staff"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone,
+      buttonPayload: 'staff',
+    });
+
+    const sessionB = chatSessionManager.getSession(shopperPhone);
+    assert.strictEqual(sessionB.state, 'HANDED_OVER_TO_SUPPORT');
+    assert.strictEqual(sessionB.context.lastSentMediaUrl, screenshotUrl);
+
+    // Scenario C: Another customer sends photo with generic inquiry "Do you have this?"
+    const shopperPhone2 = '2348088990022';
+    chatSessionManager.resetSession(shopperPhone2);
+    const photoUrl2 = 'https://example.com/product-snapshot.jpg';
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone2,
+      text: 'Do you have this?',
+      mediaUrl: photoUrl2,
+    });
+
+    const sessionC = chatSessionManager.getSession(shopperPhone2);
+    assert.strictEqual(sessionC.context.lastSentMediaUrl, photoUrl2);
+    assert.strictEqual(sessionC.context.lastPrompt, 'PHOTO_INQUIRY');
+
+    // Customer taps "Enter Product Name"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone2,
+      buttonPayload: 'enter_product',
+    });
+    assert.strictEqual(chatSessionManager.getSession(shopperPhone2).context.awaitingProductSearch, true);
+
+    // Customer types "chopping board"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone2,
+      text: 'chopping board',
+    });
+
+    const sessionD = chatSessionManager.getSession(shopperPhone2);
+    assert.strictEqual(sessionD.state, 'SELECTING_VARIANT');
+    assert.ok(sessionD.context.currentProduct);
+    assert.strictEqual(sessionD.context.currentProduct.name, 'Premium Wooden Chopping Board');
+
+    // Scenario D: Customer sends photo with explicit product name in caption
+    const shopperPhone3 = '2348088990033';
+    chatSessionManager.resetSession(shopperPhone3);
+    const photoUrl3 = 'https://example.com/knapsack-photo.jpg';
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone3,
+      text: 'I want this knapsack sprayer you advertised',
+      mediaUrl: photoUrl3,
+    });
+
+    const sessionE = chatSessionManager.getSession(shopperPhone3);
+    assert.strictEqual(sessionE.state, 'SELECTING_VARIANT');
+    assert.ok(sessionE.context.currentProduct);
+    assert.strictEqual(sessionE.context.currentProduct.name, 'Heavy-Duty 2-in-1 Knapsack Sprayer');
+    assert.strictEqual(sessionE.context.lastSentMediaUrl, photoUrl3);
+  });
 });

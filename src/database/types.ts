@@ -91,6 +91,10 @@ export interface ConversationContext {
   selectedQuantity?: number;
   pendingOrderNumber?: string;
   temporaryAddressDraft?: string;
+  lastPrompt?: string;
+  lastSearchedQuery?: string;
+  awaitingProductSearch?: boolean;
+  lastSentMediaUrl?: string;
 }
 
 export interface CustomerLead {

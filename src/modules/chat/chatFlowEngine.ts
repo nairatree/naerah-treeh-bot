@@ -116,7 +116,7 @@ export class ChatFlowEngine {
       ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'speak with staff', 'connect with our staff', 'connect with staff', 'connect to staff', 'connect staff', 'talk to human', 'human assistance', 'staff', 'customer care', 'call me'].some((k) =>
         lowerText.includes(k)
       ) ||
-      (session.context.lastPrompt === 'UNAVAILABLE' && (lowerText === '1' || btnPayloadClean === '1'));
+      ((session.context.lastPrompt === 'UNAVAILABLE' || session.context.lastPrompt === 'PHOTO_INQUIRY') && (lowerText === '1' || btnPayloadClean === '1'));
 
     if (isSupportTrigger) {
       chatSessionManager.handoverToSupport(cleanPhone);
@@ -161,7 +161,7 @@ export class ChatFlowEngine {
       btnPayloadClean === 'menu' ||
       btnPayloadClean === 'main_menu' ||
       ['menu', 'main menu', 'start', 'restart', 'reset'].includes(lowerText) ||
-      (session.context.lastPrompt === 'UNAVAILABLE' && (lowerText === '3' || btnPayloadClean === '3'));
+      ((session.context.lastPrompt === 'UNAVAILABLE' || session.context.lastPrompt === 'PHOTO_INQUIRY') && (lowerText === '3' || btnPayloadClean === '3'));
 
     if (isMainMenuTrigger) {
       chatSessionManager.resetSession(cleanPhone);
@@ -173,7 +173,8 @@ export class ChatFlowEngine {
     const isEnterProductTrigger =
       btnPayloadClean === 'enter_product' ||
       btnPayloadClean === 'enter product name' ||
-      ['enter product name', 'enter product', 'order a product', 'enter name'].includes(lowerText);
+      ['enter product name', 'enter product', 'order a product', 'enter name'].includes(lowerText) ||
+      (session.context.lastPrompt === 'PHOTO_INQUIRY' && (lowerText === '2' || btnPayloadClean === '2'));
 
     if (isEnterProductTrigger) {
       session.context.awaitingProductSearch = true;
@@ -234,6 +235,30 @@ export class ChatFlowEngine {
             );
             return;
           }
+        }
+      }
+    }
+
+    // 8b. Photo Search Assistant (Screenshots, Instagram/Facebook ads photos, camera uploads)
+    if (mediaUrl) {
+      session.context.lastSentMediaUrl = mediaUrl;
+
+      // In IDLE or BROWSING state:
+      if (session.state === 'IDLE' || session.state === 'BROWSING_PRODUCTS') {
+        let matchingProductFound = false;
+        if (cleanText.length >= 2 && !this.isGenericPhotoCaption(cleanText)) {
+          const adProduct = this.extractProductFromAdMessage(cleanText);
+          const cleanedQuery = this.cleanSearchQuery(cleanText);
+          const targetQuery = adProduct || cleanedQuery || cleanText;
+          const results = await catalogService.search(targetQuery);
+          if (results.length > 0) {
+            matchingProductFound = true;
+          }
+        }
+
+        if (!matchingProductFound) {
+          await this.handlePhotoInquiry(cleanPhone, mediaUrl, cleanText, session);
+          return;
         }
       }
     }
@@ -662,6 +687,7 @@ export class ChatFlowEngine {
       customerName: parsed.name,
       customerPhone: parsed.phone,
       deliveryAddress: parsed.address,
+      mediaUrl: session?.context?.lastSentMediaUrl,
     }).catch((err) =>
       logger.error('Failed to dispatch staff order alert in background:', err.message)
     );
@@ -678,6 +704,7 @@ export class ChatFlowEngine {
     customerName: string;
     customerPhone: string;
     deliveryAddress: string;
+    mediaUrl?: string;
   }): Promise<void> {
     try {
       const settings = await db.getStoreSettings();
@@ -699,8 +726,11 @@ export class ChatFlowEngine {
       alert += `• *Phone:* +${params.customerPhone}\n`;
       alert += `• *Address:* ${params.deliveryAddress}\n`;
       alert += `• *Product:* ${params.productName}${variantText}\n`;
-      alert += `• *Quantity:* ${params.quantity} piece(s) (${totalFormatted})\n\n`;
-      alert += `👉 *Tap to chat with customer right now:* https://wa.me/${params.customerPhone}`;
+      alert += `• *Quantity:* ${params.quantity} piece(s) (${totalFormatted})\n`;
+      if (params.mediaUrl) {
+        alert += `• *Customer Photo:* ${params.mediaUrl}\n`;
+      }
+      alert += `\n👉 *Tap to chat with customer right now:* https://wa.me/${params.customerPhone}`;
 
       await botsailorClient.sendTextMessage(supportPhone, alert);
       logger.info(`Dispatched new order alert to staff (${supportPhone}) for customer (+${params.customerPhone})`);
@@ -796,8 +826,16 @@ export class ChatFlowEngine {
         supportPhone = '234' + supportPhone.substring(1);
       }
 
-      const item = session?.context?.currentProduct?.name
-        || (session?.context?.lastSearchedQuery ? `"${session.context.lastSearchedQuery}" (Requested item - Out of stock / Unavailable)` : 'Browsing Catalog');
+      let item = session?.context?.currentProduct?.name;
+      if (!item) {
+        if (session?.context?.lastPrompt === 'PHOTO_INQUIRY' || session?.context?.lastSentMediaUrl) {
+          item = 'Customer sent a photo / Screenshot inquiry';
+        } else if (session?.context?.lastSearchedQuery) {
+          item = `"${session.context.lastSearchedQuery}" (Requested item - Out of stock / Unavailable)`;
+        } else {
+          item = 'Browsing Catalog';
+        }
+      }
 
       const variant = session?.context?.selectedVariant
         ? [session.context.selectedVariant.color, session.context.selectedVariant.size].filter(Boolean).join(' - ')
@@ -807,8 +845,11 @@ export class ChatFlowEngine {
       alert += `A customer requested human staff assistance on WhatsApp:\n\n`;
       alert += `• *Customer Phone:* +${customerPhone}\n`;
       alert += `• *Product of Interest:* ${item}\n`;
-      alert += `• *Selected Variant:* ${variant}\n\n`;
-      alert += `👉 *Tap to chat with customer directly:* https://wa.me/${customerPhone}`;
+      alert += `• *Selected Variant:* ${variant}\n`;
+      if (session?.context?.lastSentMediaUrl) {
+        alert += `• *Customer Photo:* ${session.context.lastSentMediaUrl}\n`;
+      }
+      alert += `\n👉 *Tap to chat with customer directly:* https://wa.me/${customerPhone}`;
 
       await botsailorClient.sendTextMessage(supportPhone, alert);
       logger.info(`Dispatched support alert to staff (${supportPhone}) for customer (+${customerPhone})`);
@@ -973,6 +1014,89 @@ export class ChatFlowEngine {
       /\b(how\s+much\s+is|cost\s+of|rate\s+of|give\s+me|send\s+me|send\s+price)\b/i,
     ];
     return buyingPatterns.some((pattern) => pattern.test(lower));
+  }
+
+  /**
+   * Photo Search Assistant: Handles screenshots and image inquiries from Facebook/Instagram ads
+   */
+  async handlePhotoInquiry(
+    phoneNumber: string,
+    mediaUrl: string,
+    caption?: string,
+    session?: any
+  ): Promise<void> {
+    if (session && session.context) {
+      session.context.lastSentMediaUrl = mediaUrl;
+      session.context.lastPrompt = 'PHOTO_INQUIRY';
+      session.context.lastSearchedQuery = caption || 'Photo Screenshot Inquiry';
+    }
+
+    let msg = `📸 *Thanks for sharing the photo!*\n\n`;
+    msg += `Are you looking to order this item or check its availability?\n\n`;
+    msg += `👉 Reply with the *product name* (e.g. *Chopping Board*, *Sprayer*, *Mop*)\n\n`;
+    msg += `👉 Or tap *Talk to Staff* so our team can view your photo and assist you right away!`;
+
+    await botsailorClient.sendQuickReplyButtons(
+      phoneNumber,
+      msg,
+      [
+        { text: 'Talk to Staff', payload: 'staff' },
+        { text: 'Enter Product Name', payload: 'enter_product' },
+        { text: 'Main Menu', payload: 'menu' },
+      ],
+      'Nairatee Stores'
+    );
+  }
+
+  /**
+   * Checks if an image caption is a generic inquiry rather than a specific product search
+   * (e.g. "Do you have this?", "How much?", "Price", "Is this available?", etc.)
+   */
+  isGenericPhotoCaption(text: string): boolean {
+    if (!text || text.trim().length === 0) return true;
+    const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (clean.length < 2) return true;
+
+    const genericPhrases = [
+      'this',
+      'this one',
+      'do you have this',
+      'do you have this one',
+      'do you have this product',
+      'do you have',
+      'how much',
+      'how much is this',
+      'how much for this',
+      'how much is this one',
+      'what is the price',
+      'what is the price of this',
+      'price',
+      'price please',
+      'is this available',
+      'is this in stock',
+      'available',
+      'in stock',
+      'do you sell this',
+      'i want this',
+      'i need this',
+      'can i get this',
+      'check this',
+      'hello',
+      'hi',
+      'good morning',
+      'good afternoon',
+      'good day',
+    ];
+
+    if (genericPhrases.includes(clean)) {
+      return true;
+    }
+
+    if (/^(?:do you have|how much|what is the price|is this|price of|can i get|i want|i need)\s+(?:this|this one|this item|this product)?$/i.test(clean)) {
+      return true;
+    }
+
+    return false;
   }
 }
 
