@@ -4,6 +4,7 @@ import { catalogService } from '../catalog/catalogService.ts';
 import { chatFlowEngine } from '../chat/chatFlowEngine.ts';
 import { chatSessionManager } from '../chat/chatSessionManager.ts';
 import { followupService } from '../followup/followupService.ts';
+import { systemSettings } from '../system/systemSettings.ts';
 import { config } from '../../config/environment.ts';
 import { logger } from '../../utils/logger.ts';
 
@@ -190,8 +191,8 @@ export const adminController = {
    */
   async getBotStatus(req: Request, res: Response): Promise<void> {
     try {
-      const settings = await db.getStoreSettings();
-      res.json({ isBotActive: settings.is_bot_active !== false });
+      const isBotActive = await systemSettings.isBotGloballyActive();
+      res.json({ isBotActive });
     } catch (err: any) {
       logger.error('Failed to get bot status:', err.message);
       res.status(500).json({ error: 'Failed to get bot status' });
@@ -200,15 +201,13 @@ export const adminController = {
 
   async setBotStatus(req: Request, res: Response): Promise<void> {
     try {
-      const { active, isBotActive } = req.body;
+      const { active, isBotActive, reason } = req.body;
       const targetState = typeof active === 'boolean'
         ? active
         : (typeof isBotActive === 'boolean' ? isBotActive : true);
 
-      await db.updateStoreSettings({ is_bot_active: targetState });
-      const updated = await db.getStoreSettings();
-      logger.info(`Master bot status updated via API: isBotActive=${updated.is_bot_active}`);
-      res.json({ isBotActive: updated.is_bot_active !== false });
+      await systemSettings.setBotGloballyActive(targetState, reason || 'Admin API');
+      res.json({ isBotActive: targetState });
     } catch (err: any) {
       logger.error('Failed to set bot status:', err.message);
       res.status(500).json({ error: 'Failed to update bot status' });

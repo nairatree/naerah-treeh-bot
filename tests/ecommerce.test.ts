@@ -5,7 +5,8 @@ import { orderService } from '../src/modules/orders/orderService.ts';
 import { chatSessionManager } from '../src/modules/chat/chatSessionManager.ts';
 import { chatFlowEngine } from '../src/modules/chat/chatFlowEngine.ts';
 import { followupService } from '../src/modules/followup/followupService.ts';
-import { isOutboundAgentMessage, extractTargetRecipientPhone, handleBotSailorWebhook } from '../src/modules/webhooks/botsailorWebhook.ts';
+import { isOutboundAgentMessage, extractTargetRecipientPhone, handleBotSailorWebhook, findMediaInPayload } from '../src/modules/webhooks/botsailorWebhook.ts';
+import { systemSettings } from '../src/modules/system/systemSettings.ts';
 import { db } from '../src/database/supabaseClient.ts';
 import { config } from '../src/config/environment.ts';
 
@@ -827,5 +828,132 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.ok(sessionE.context.currentProduct);
     assert.strictEqual(sessionE.context.currentProduct.name, 'Heavy-Duty 2-in-1 Knapsack Sprayer');
     assert.strictEqual(sessionE.context.lastSentMediaUrl, photoUrl3);
+  });
+
+  test('20. Layer 3: Stale CRM Profile & Custom Fields Isolation', async () => {
+    // 1. Webhook payload containing historical custom_fields with an old receipt/attachment
+    const payloadWithStaleCRM = {
+      chat_id: '2348077112233',
+      text: 'hello',
+      subscriber: {
+        first_name: 'Blessing',
+        custom_fields: {
+          past_receipt_url: 'https://example.com/stale-crm-receipt.jpg',
+          delivery_slip: 'https://example.com/stale-slip.jpg',
+        },
+      },
+      custom_fields: {
+        old_attachment: 'https://example.com/stale-attachment.jpg',
+      },
+    };
+
+    // Verify media extractor refuses to scan passive CRM keys
+    const extractedMedia = findMediaInPayload(payloadWithStaleCRM);
+    assert.strictEqual(extractedMedia, undefined, 'Must NEVER extract media from passive subscriber CRM fields');
+
+    // 2. Engine guard: Even if a stale mediaUrl is passed with "hello", it must NOT trigger photo inquiry
+    const testPhone = '2348077112233';
+    chatSessionManager.resetSession(testPhone);
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: testPhone,
+      text: 'hello',
+      mediaUrl: 'https://example.com/stale-receipt.jpg', // Stale CRM media
+    });
+
+    const session = chatSessionManager.getSession(testPhone);
+    // Session should remain IDLE (smart greeting sent), NOT locked into PHOTO_INQUIRY
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'PHOTO_INQUIRY');
+  });
+
+  test('21. Layer 4: Session Inactivity Timeout (2 Hours) Automatically Resets Session to IDLE', () => {
+    const testPhone = '2348077445566';
+    chatSessionManager.resetSession(testPhone);
+
+    // Put customer in middle of checkout
+    chatSessionManager.setState(testPhone, 'AWAITING_DELIVERY_DETAILS');
+    const session = chatSessionManager.getSession(testPhone);
+    assert.strictEqual(session.state, 'AWAITING_DELIVERY_DETAILS');
+
+    // Simulate 2.5 hours of inactivity (> 2 hours timeout)
+    const twoAndHalfHoursAgo = Date.now() - (2.5 * 60 * 60 * 1000);
+    session.updatedAt = twoAndHalfHoursAgo;
+
+    // Accessing session after timeout triggers auto-reset
+    const refreshedSession = chatSessionManager.getSession(testPhone);
+    assert.strictEqual(refreshedSession.state, 'IDLE', 'Session must auto-reset to IDLE after 2 hours of inactivity');
+  });
+
+  test('22. Layer 4: Customer In Uncompleted Checkout Returning With "Hello Good Morning" Resets to IDLE & Presents Main Menu (Never Demands Address)', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const shopperPhone = '2348077889900';
+    chatSessionManager.resetSession(shopperPhone);
+
+    // Customer was in the middle of awaiting address
+    chatSessionManager.setState(shopperPhone, 'AWAITING_DELIVERY_DETAILS');
+    chatSessionManager.setCurrentProduct(shopperPhone, {
+      id: 'prod-test-chop',
+      name: 'Premium Wooden Chopping Board',
+      category_name: 'Kitchen',
+      base_price: 8500,
+      description: 'Teak board',
+      media_urls: [],
+      is_available: true,
+    });
+    chatSessionManager.setSelectedQuantity(shopperPhone, 2);
+
+    assert.strictEqual(chatSessionManager.getSession(shopperPhone).state, 'AWAITING_DELIVERY_DETAILS');
+
+    // Customer returns later and says "hello good morning"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: shopperPhone,
+      text: 'hello good morning',
+    });
+
+    // Verification: Session was cleanly auto-reset to IDLE and did NOT demand delivery address
+    const session = chatSessionManager.getSession(shopperPhone);
+    assert.strictEqual(session.state, 'IDLE', 'Returning customer greeting must cleanly reset uncompleted flow to IDLE');
+    assert.strictEqual(session.context.selectedQuantity, undefined, 'Temporary uncommitted drafts must be cleared');
+  });
+
+  test('23. Layer 4 & 5: Universal Reset Commands ("reset", "clear", "cancel") & SystemSettings Singleton', async () => {
+    // 1. Verify SystemSettings singleton
+    const isActive = await systemSettings.isBotGloballyActive();
+    assert.strictEqual(isActive, true);
+
+    await systemSettings.setBotGloballyActive(false, 'Maintenance test');
+    assert.strictEqual(await systemSettings.isBotGloballyActive(), false);
+
+    await systemSettings.setBotGloballyActive(true, 'Test restore');
+    assert.strictEqual(await systemSettings.isBotGloballyActive(), true);
+
+    // 2. Verify Universal Reset Commands across active states
+    const testPhone = '2348077332211';
+    chatSessionManager.resetSession(testPhone);
+
+    // In SELECTING_VARIANT state, user types "reset"
+    chatSessionManager.setState(testPhone, 'SELECTING_VARIANT');
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: testPhone,
+      text: 'reset',
+    });
+    assert.strictEqual(chatSessionManager.getSession(testPhone).state, 'IDLE');
+
+    // In AWAITING_QUANTITY state, user types "clear"
+    chatSessionManager.setState(testPhone, 'AWAITING_QUANTITY');
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: testPhone,
+      text: 'clear',
+    });
+    assert.strictEqual(chatSessionManager.getSession(testPhone).state, 'IDLE');
+
+    // In AWAITING_DELIVERY_DETAILS state, user types "start over"
+    chatSessionManager.setState(testPhone, 'AWAITING_DELIVERY_DETAILS');
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: testPhone,
+      text: 'start over',
+    });
+    assert.strictEqual(chatSessionManager.getSession(testPhone).state, 'IDLE');
   });
 });

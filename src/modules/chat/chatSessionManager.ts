@@ -5,9 +5,9 @@ import { logger } from '../../utils/logger.ts';
 class ChatSessionManager {
   private sessions = new Map<string, ChatSession>();
   private humanTakeovers = new Map<string, number>(); // cleanPhone -> expiry timestamp
-  private readonly TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours Session Window
-  private readonly INACTIVITY_RESET_MS = 30 * 60 * 1000; // 30 Minutes Inactivity Reset
-  private readonly DEFAULT_TAKEOVER_MS = 24 * 60 * 60 * 1000; // 24 Hours Human Takeover Mute Window
+  public readonly TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours Session Window
+  public readonly SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 Hours Inactivity Timeout (Layer 4)
+  public readonly DEFAULT_TAKEOVER_MS = 24 * 60 * 60 * 1000; // 24 Hours Human Takeover Mute Window (Layer 2)
 
   getSession(phoneNumber: string): ChatSession {
     const cleanPhone = phoneNumber.replace(/\D/g, '');
@@ -24,9 +24,9 @@ class ChatSessionManager {
         updatedAt: now,
       };
       this.sessions.set(cleanPhone, session);
-    } else if (session.state !== 'IDLE' && session.state !== 'HANDED_OVER_TO_SUPPORT' && now - session.updatedAt > this.INACTIVITY_RESET_MS) {
-      // Inactivity timeout: reset state back to IDLE so casual chats aren't captured as order responses
-      logger.info(`Session for ${cleanPhone} timed out after 30 mins. Resetting to IDLE.`);
+    } else if (session.state !== 'IDLE' && session.state !== 'HANDED_OVER_TO_SUPPORT' && now - session.updatedAt > this.SESSION_TIMEOUT_MS) {
+      // Layer 4: Inactivity timeout (2 hours) - automatically expire back to IDLE, clear invalid attempts & uncommitted drafts
+      logger.info(`Session for ${cleanPhone} timed out after 2 hours. Resetting to IDLE.`);
       session.state = 'IDLE';
       session.context = { lastActiveTime: now };
     }
@@ -98,7 +98,11 @@ class ChatSessionManager {
    * Suppresses automated chatbot replies for durationMs (default: 24 hours)
    * and immediately resets any pending checkout/variant/quantity questionnaire back to IDLE.
    */
-  activateHumanTakeover(phoneNumber: string, durationMs: number = this.DEFAULT_TAKEOVER_MS): void {
+  activateHumanTakeover(
+    phoneNumber: string,
+    durationMs: number = this.DEFAULT_TAKEOVER_MS,
+    reason: string = 'agent_outbound_reply'
+  ): void {
     const cleanPhone = phoneNumber.replace(/\D/g, '');
     const until = Date.now() + durationMs;
     this.humanTakeovers.set(cleanPhone, until);
@@ -111,7 +115,18 @@ class ChatSessionManager {
     };
     session.updatedAt = Date.now();
 
-    logger.info(`[HUMAN TAKEOVER] Activated for ${cleanPhone} until ${new Date(until).toISOString()}. Customer session reset to IDLE.`);
+    logger.info(`[HUMAN TAKEOVER] Activated for ${cleanPhone} until ${new Date(until).toISOString()} (Reason: ${reason}). Customer session reset to IDLE.`);
+  }
+
+  /**
+   * LAYER 2: Alias matching specification name: setHumanTakeover
+   */
+  setHumanTakeover(
+    phoneNumber: string,
+    durationMs: number = this.DEFAULT_TAKEOVER_MS,
+    reason: string = 'agent_outbound_reply'
+  ): void {
+    this.activateHumanTakeover(phoneNumber, durationMs, reason);
   }
 
   /**

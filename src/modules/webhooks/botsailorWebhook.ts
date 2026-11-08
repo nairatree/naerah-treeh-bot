@@ -2,8 +2,72 @@ import type { Request, Response } from 'express';
 import { logger } from '../../utils/logger.ts';
 import { chatFlowEngine } from '../chat/chatFlowEngine.ts';
 import { chatSessionManager } from '../chat/chatSessionManager.ts';
+import { systemSettings } from '../system/systemSettings.ts';
 import { db } from '../../database/supabaseClient.ts';
 import { config } from '../../config/environment.ts';
+
+/**
+ * LAYER 3: Blacklist of passive CRM / profile keys that must NEVER be recursively scanned for live message attachments.
+ */
+export const CRM_PASSIVE_PROFILE_KEYS = [
+  'subscriber',
+  'custom_fields',
+  'subscriber_custom_fields',
+  'contact_fields',
+  'user_profile',
+  'contact',
+  'contacts',
+  'user',
+  'sender_profile',
+  'profile',
+];
+
+/**
+ * LAYER 3: Extract live media attached directly to the active incoming message event.
+ * Explicitly ignores historical custom fields and passive CRM subscriber profiles.
+ */
+export function findMediaInPayload(payload: any): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+
+  // 1. Meta WhatsApp Cloud API active message format
+  const msg0 = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  if (msg0) {
+    const metaMedia =
+      msg0.image?.url ||
+      msg0.video?.url ||
+      msg0.document?.url ||
+      msg0.audio?.url;
+    if (metaMedia) return String(metaMedia).trim();
+  }
+
+  // 2. BotSailor live message object format
+  const activeMsg = payload.message;
+  if (activeMsg && typeof activeMsg === 'object') {
+    const msgMedia =
+      activeMsg.image?.url ||
+      activeMsg.video?.url ||
+      activeMsg.document?.url ||
+      activeMsg.media_url ||
+      activeMsg.attachment_url ||
+      activeMsg.url;
+    if (msgMedia) return String(msgMedia).trim();
+  }
+
+  // 3. Direct top-level active message event fields (Explicitly ignore passive CRM keys)
+  const directMedia =
+    payload.attachment_url ||
+    payload.media_url ||
+    payload.image_url ||
+    payload.video_url ||
+    payload.media?.url ||
+    payload.attachment?.url;
+
+  if (directMedia && typeof directMedia === 'string') {
+    return directMedia.trim();
+  }
+
+  return undefined;
+}
 
 /**
  * LAYER 1: Inspect incoming payloads and detect if the message was sent by the business or an agent.
@@ -144,8 +208,8 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
 
   const settings = await db.getStoreSettings();
 
-  // LAYER 3: Global Master Bot Killswitch (Immediate Discard when disabled)
-  const isBotActive = settings.is_bot_active !== false;
+  // LAYER 5: Global Master Bot Killswitch (Immediate Discard when disabled)
+  const isBotActive = await systemSettings.isBotGloballyActive();
   if (!isBotActive) {
     logger.info('[KILLSWITCH] Bot is globally disabled. Webhook dropping incoming message.');
     res.status(200).json({ status: 'ignored', reason: 'bot_globally_disabled' });
@@ -236,19 +300,8 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
     ''
   ).trim();
 
-  // Extract Media Attachment
-  let mediaUrl: string | undefined =
-    payload.media_url ||
-    payload.attachment_url ||
-    payload.image_url ||
-    payload.video_url ||
-    payload.media?.url ||
-    payload.attachment?.url ||
-    payload.message?.media_url ||
-    payload.message?.image?.url ||
-    payload.message?.video?.url ||
-    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.image?.url ||
-    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.video?.url;
+  // LAYER 3: Extract Media Attachment safely (Isolated from stale CRM profile fields)
+  let mediaUrl: string | undefined = findMediaInPayload(payload);
 
   // Extract media caption if userText is empty
   if (!userText && (payload.media_caption || payload.message?.caption)) {

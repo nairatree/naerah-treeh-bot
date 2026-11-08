@@ -3,6 +3,7 @@ import { chatSessionManager } from './chatSessionManager.ts';
 import { catalogService } from '../catalog/catalogService.ts';
 import { orderService } from '../orders/orderService.ts';
 import { followupService } from '../followup/followupService.ts';
+import { systemSettings } from '../system/systemSettings.ts';
 import { db } from '../../database/supabaseClient.ts';
 import { config } from '../../config/environment.ts';
 import { logger } from '../../utils/logger.ts';
@@ -42,7 +43,8 @@ export class ChatFlowEngine {
     }
 
     // 0. MASTER KILLSWITCH: If bot is turned OFF, stay 100% silent for shoppers!
-    if (settings.is_bot_active === false) {
+    const isBotActive = await systemSettings.isBotGloballyActive();
+    if (!isBotActive) {
       logger.info(`[KILLSWITCH ACTIVE] Bot is currently PAUSED. Silently ignoring message from ${cleanPhone}.`);
       return;
     }
@@ -54,7 +56,10 @@ export class ChatFlowEngine {
         btnPayloadClean === 'menu' ||
         btnPayloadClean === 'start' ||
         btnPayloadClean === 'restart' ||
-        ['menu', 'start', 'restart', 'reset', 'bot', 't-bot', 'teebot', 'tbot', 'hello t-bot', 'hello teebot'].some((cmd) =>
+        btnPayloadClean === 'reset' ||
+        btnPayloadClean === 'shop' ||
+        btnPayloadClean === 'catalog' ||
+        ['menu', 'start', 'restart', 'reset', 'clear', 'bot', 't-bot', 'teebot', 'tbot', 'hello t-bot', 'hello teebot', 'shop', 'store', 'catalog'].some((cmd) =>
           cleanLower === cmd || cleanLower.includes(cmd)
         );
 
@@ -156,17 +161,55 @@ export class ChatFlowEngine {
       return;
     }
 
-    // 5. Check for Explicit Reset / Main Menu Commands (Takes user back to start of flow, NOT greeting)
+    // 5. Universal Reset Commands (Takes user back to start of flow, NOT greeting)
+    const universalResetCommands = [
+      'reset',
+      'clear',
+      'restart',
+      'start over',
+      'menu',
+      'main menu',
+      'clear all',
+      'cancel',
+      'home',
+      'shop',
+      'store',
+      'catalog',
+      'start',
+    ];
+
     const isMainMenuTrigger =
       btnPayloadClean === 'menu' ||
       btnPayloadClean === 'main_menu' ||
-      ['menu', 'main menu', 'start', 'restart', 'reset'].includes(lowerText) ||
+      btnPayloadClean === 'reset' ||
+      btnPayloadClean === 'start' ||
+      btnPayloadClean === 'restart' ||
+      btnPayloadClean === 'shop' ||
+      btnPayloadClean === 'catalog' ||
+      universalResetCommands.includes(cleanLower) ||
       ((session.context.lastPrompt === 'UNAVAILABLE' || session.context.lastPrompt === 'PHOTO_INQUIRY') && (lowerText === '3' || btnPayloadClean === '3'));
 
     if (isMainMenuTrigger) {
       chatSessionManager.resetSession(cleanPhone);
       await this.sendStartOfFlowPrompt(cleanPhone);
       return;
+    }
+
+    // LAYER 4: Stale / Abandoned Session Auto-Reset on Casual Greeting
+    // If a customer returns to an uncompleted session (e.g. AWAITING_DELIVERY_DETAILS, SELECTING_VARIANT, AWAITING_QUANTITY)
+    // and sends a casual greeting ("hello", "hi", "hey", "good morning", etc.):
+    // Cleanly reset the session back to IDLE and display the Main Menu / Start of Flow prompt instead of throwing invalid step errors or demanding an address!
+    if (session.state !== 'IDLE' && session.state !== 'HANDED_OVER_TO_SUPPORT') {
+      const isCasualGreeting =
+        this.isStandaloneGreeting(cleanText) ||
+        ['hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening', 'good day', 'morning', 'afternoon'].includes(cleanLower);
+
+      if (isCasualGreeting) {
+        logger.info(`[SESSION AUTO-RESET] Customer ${cleanPhone} returned to uncompleted flow (${session.state}) with greeting "${cleanText}". Resetting to IDLE and presenting Main Menu.`);
+        chatSessionManager.resetSession(cleanPhone);
+        await this.sendStartOfFlowPrompt(cleanPhone);
+        return;
+      }
     }
 
     // 5b. Check for "Enter Product Name" Button Tap
@@ -240,7 +283,13 @@ export class ChatFlowEngine {
     }
 
     // 8b. Photo Search Assistant (Screenshots, Instagram/Facebook ads photos, camera uploads)
-    if (mediaUrl) {
+    // LAYER 3 GUARD: NEVER trigger photo search if the inbound message is a casual greeting, keyword trigger, or reset command!
+    const isGreetingOrReset =
+      this.isStandaloneGreeting(cleanText) ||
+      universalResetCommands.includes(cleanLower) ||
+      btnPayloadClean.length > 0;
+
+    if (mediaUrl && !isGreetingOrReset) {
       session.context.lastSentMediaUrl = mediaUrl;
 
       // In IDLE or BROWSING state:
@@ -637,6 +686,12 @@ export class ChatFlowEngine {
 
     const parsed = orderService.parseAddressMessage(text, phoneNumber);
 
+    if (this.isStandaloneGreeting(text)) {
+      chatSessionManager.resetSession(phoneNumber);
+      await this.sendStartOfFlowPrompt(phoneNumber);
+      return;
+    }
+
     if (!parsed.address || parsed.address.length < 5) {
       await botsailorClient.sendTextMessage(
         phoneNumber,
@@ -904,10 +959,16 @@ export class ChatFlowEngine {
    * Casual non-store messages like "Good morning, hope the kids are fine?" or "Bro call me" are NOT standalone greetings.
    */
   isStandaloneGreeting(text: string): boolean {
-    const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+    const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
     // Explicit "Hello T-Bot" / "Teebot" flow triggers
     if (/\b(t\s*bot|teebot)\b/i.test(text)) {
+      return true;
+    }
+
+    // Match single greetings or common combinations like "hello good morning", "hi good day", "good morning nairatee"
+    const greetingComboPattern = /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|day|greetings|howdy|wassup|whatsup|whats\s+up|yo)(?:\s+(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|morning|afternoon|evening|day|nairatee|stores|bot|t\s*bot|teebot))*\s*$/i;
+    if (greetingComboPattern.test(clean)) {
       return true;
     }
 
