@@ -1,5 +1,6 @@
 import { db } from '../../database/supabaseClient.ts';
 import { botsailorClient } from '../../integrations/botsailor/botsailorClient.ts';
+import { chatSessionManager } from '../chat/chatSessionManager.ts';
 import { logger } from '../../utils/logger.ts';
 import type { CustomerLead, Product, ProductVariant } from '../../database/types.ts';
 
@@ -139,6 +140,13 @@ class FollowupService {
 
     for (const lead of this.leads.values()) {
       if (lead.status !== 'PENDING_ADDRESS') {
+        continue;
+      }
+
+      // Respect Layer 2 Human Takeover: Never dispatch automated follow-ups if human agent is conversing
+      if (chatSessionManager.isHumanTakeoverActive(lead.phoneNumber)) {
+        logger.info(`FollowupService: Customer ${lead.phoneNumber} is in active human takeover. Skipping follow-up.`);
+        skipped++;
         continue;
       }
 

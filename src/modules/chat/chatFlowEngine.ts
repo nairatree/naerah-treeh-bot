@@ -42,6 +42,19 @@ export class ChatFlowEngine {
       }
     }
 
+    // REVOKE & PROTOCOL GUARD: Never process WhatsApp message revoke/delete events or synthetic attachment tokens
+    if (
+      cleanText.includes('#ATTACHMENT:revoke#') ||
+      cleanText.toLowerCase().includes('revoke#') ||
+      cleanText.toLowerCase() === 'revoke' ||
+      cleanText.toLowerCase().includes('deleted this message') ||
+      cleanText.toLowerCase().includes('this message was deleted') ||
+      cleanText.toLowerCase().includes('you deleted')
+    ) {
+      logger.info(`[CHAT_FLOW] Discarding message revoke/deletion event from ${cleanPhone}`);
+      return;
+    }
+
     // 0. MASTER KILLSWITCH: If bot is turned OFF, stay 100% silent for shoppers!
     const isBotActive = await systemSettings.isBotGloballyActive();
     if (!isBotActive) {
@@ -375,6 +388,12 @@ export class ChatFlowEngine {
   ): Promise<void> {
     if (!cleanText || cleanText.length < 2) {
       logger.info(`Ignoring short idle message from ${phoneNumber}: "${cleanText}"`);
+      return;
+    }
+
+    // Gate 0: Immediate rejection of casual personal chatter, payment chatter, and system events
+    if (this.isCasualNonStoreMessage(cleanText)) {
+      logger.info(`[ANTI-INTERFERENCE] Ignoring casual non-store message from ${phoneNumber}: "${cleanText}"`);
       return;
     }
 
@@ -1045,22 +1064,54 @@ export class ChatFlowEngine {
   }
 
   /**
-   * Identifies casual, non-store personal chatter from family, friends, and personal contacts
-   * (e.g. "Bro, where are you guys right now?", "Good morning, hope the kids are fine?", "Seen", "Call me")
+   * Identifies casual, non-store personal chatter from family, friends, staff, and personal contacts
+   * (e.g. "We've seen it ma", "Sent it", "Bro, where are you guys right now?", "Seen", "Call me")
+   * as well as WhatsApp system/revocation strings.
    */
   isCasualNonStoreMessage(text: string): boolean {
-    const clean = text.toLowerCase().replace(/[^\w\s]/g, ' ').trim();
+    if (!text) return true;
+    const lower = text.toLowerCase().trim();
+
+    // 1. Synthetic tokens, revoke strings, WhatsApp system events
+    if (
+      lower.includes('#attachment') ||
+      lower.includes('revoke') ||
+      lower.includes('caption:') ||
+      lower.includes('deleted this message') ||
+      lower.includes('you deleted') ||
+      lower.includes('this message was deleted') ||
+      lower.includes('edited') ||
+      text.includes('#') ||
+      text.includes('|')
+    ) {
+      return true;
+    }
+
+    const clean = lower.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // 2. Comprehensive casual phrases, Nigerian informal greetings, conversational responses
     const casualPatterns = [
       /\bwhere\s+(are\s+you|you\s+dey|you\s+at)\b/i,
       /\bhow\s+(are\s+you|is\s+it|far|things|business|family|life)\b/i,
       /\bhope\s+(the\s+kids|all\s+is\s+well|you\s+are\s+fine|family\s+is\s+good)\b/i,
-      /\b(call|ring)\s+me\b/i,
+      /\b(call|ring|ping)\s+me\b/i,
       /\bare\s+you\s+(home|around|at\s+the\s+shop|in\s+lagos|busy)\b/i,
       /\b(bro|brother|sis|sister|my\s+guy|my\s+bro|boss|padi)\b/i,
       /\b(wetin\s+dey|wetin\s+happen)\b/i,
-      /^(seen|ok|okay|k|alright|cool|lol|haha|amen|safe|sharp|thanks|thank\s+you|good)$/i,
+      /^(seen|ok|okay|k|alright|cool|lol|haha|amen|safe|sharp|thanks|thank\s+you|good|yes|no|done|fine|alryt|noted)$/i,
       /\b(good\s+morning|good\s+afternoon|good\s+evening|good\s+day)\b/i,
+      // Payment acknowledgments & chatter (e.g. "We've seen it ma", "Sent it", "Sent the money", "Check receipt")
+      /\b(seen\s+it|we\s+ve\s+seen|we\s+seen|i\s+seen|have\s+seen|seen\s+am|seen\s+ma|seen\s+sir|noted\s+ma|noted\s+sir)\b/i,
+      /\b(sent\s+(?:the\s+)?(?:money|cash|funds|transfer|receipt|proof)|money\s+sent|transfer\s+sent|paid|have\s+paid|i\s+paid|payment\s+done|just\s+sent)\b/i,
+      /\b(check\s+receipt|see\s+receipt|check\s+payment|confirm\s+payment|check\s+proof|see\s+proof|check\s+alert)\b/i,
+      /\b(opay|palmpay|kuda|moniepoint|zenith|gtb|access|first\s+bank|uba)\b/i,
+      /\b(money|transfer|receipt|account\s+number|account\s+no|payment\s+proof|bank\s+alert)\b/i,
+      // Customer service / delivery / dispatch chatter
+      /\b(where\s+is\s+my|when\s+will|track|waybill|dispatch|driver|rider|delivered|delivery\s+man)\b/i,
+      // Common Nigerian conversational phrases
+      /\b(no\s+problem|no\s+wahala|god\s+bless|thanks\s+ma|thanks\s+sir|thank\s+you\s+ma|thank\s+you\s+sir|welcome\s+ma|welcome\s+sir)\b/i,
     ];
+
     return casualPatterns.some((pattern) => pattern.test(clean));
   }
 

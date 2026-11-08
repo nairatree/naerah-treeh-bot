@@ -70,6 +70,117 @@ export function findMediaInPayload(payload: any): string | undefined {
 }
 
 /**
+ * Detects whether an incoming webhook payload represents a protocol event,
+ * message deletion/revocation ("You deleted this message"), or emoji reaction
+ * that must NEVER trigger a bot response or catalog search.
+ */
+export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+
+  // 1. Direct message type flags
+  const msgType = String(
+    payload.type ||
+    payload.message?.type ||
+    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.type ||
+    ''
+  ).toLowerCase().trim();
+
+  if (['protocol', 'reaction', 'ephemeral', 'revoke', 'deleted', 'notification'].includes(msgType)) {
+    return true;
+  }
+
+  // 2. Protocol message object (WhatsApp Cloud API / Baileys format)
+  const protocolMsg =
+    payload.protocolMessage ||
+    payload.message?.protocolMessage ||
+    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.protocolMessage;
+  if (protocolMsg) {
+    return true;
+  }
+
+  // 3. Action / Event names
+  const action = String(payload.action || payload.event || payload.event_type || '').toLowerCase().trim();
+  if (action === 'revoke' || action === 'delete' || action === 'message_revoke' || action === 'message_deleted') {
+    return true;
+  }
+
+  // 4. BotSailor attachment revoke tokens in any text field
+  const rawFields = [
+    typeof payload.message === 'string' ? payload.message : '',
+    typeof payload.text === 'string' ? payload.text : '',
+    typeof payload.body === 'string' ? payload.body : '',
+    typeof payload.caption === 'string' ? payload.caption : '',
+    typeof payload.message_content === 'string' ? payload.message_content : '',
+    userText || '',
+  ];
+
+  for (const field of rawFields) {
+    if (!field) continue;
+    const lower = field.toLowerCase().trim();
+    if (
+      lower.includes('#attachment:revoke#') ||
+      lower.includes('revoke#') ||
+      lower === 'revoke' ||
+      lower.includes('deleted this message') ||
+      lower.includes('you deleted') ||
+      lower.includes('this message was deleted')
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Cleans BotSailor synthetic tokens (e.g. #ATTACHMENT:<type_or_url># |caption:<text>)
+ * and extracts genuine text content and attachment URLs.
+ */
+export function sanitizeBotSailorText(rawText: string): {
+  cleanText: string;
+  isRevoke: boolean;
+  attachmentUrl?: string;
+} {
+  if (!rawText) return { cleanText: '', isRevoke: false };
+
+  const trimmed = rawText.trim();
+
+  // 1. Detect revoke/deleted event
+  if (
+    trimmed.includes('#ATTACHMENT:revoke#') ||
+    trimmed.toLowerCase().includes('revoke#') ||
+    trimmed.toLowerCase() === 'revoke' ||
+    trimmed.toLowerCase().includes('deleted this message') ||
+    trimmed.toLowerCase().includes('this message was deleted')
+  ) {
+    return { cleanText: '', isRevoke: true };
+  }
+
+  // 2. Parse BotSailor attachment wrapper: #ATTACHMENT:<token># |caption:<text>
+  if (trimmed.startsWith('#ATTACHMENT:') || trimmed.includes('|caption:')) {
+    const captionMatch = trimmed.match(/\|caption:\s*(.*)$/i);
+    const caption = captionMatch ? captionMatch[1].trim() : '';
+
+    const attachMatch = trimmed.match(/#ATTACHMENT:([^#]+)#/i);
+    const attachToken = attachMatch ? attachMatch[1].trim() : '';
+
+    if (attachToken.toLowerCase() === 'revoke') {
+      return { cleanText: '', isRevoke: true };
+    }
+
+    const isUrl = attachToken.startsWith('http://') || attachToken.startsWith('https://');
+
+    return {
+      cleanText: caption,
+      isRevoke: false,
+      attachmentUrl: isUrl ? attachToken : undefined,
+    };
+  }
+
+  return { cleanText: trimmed, isRevoke: false };
+}
+
+/**
  * LAYER 1: Inspect incoming payloads and detect if the message was sent by the business or an agent.
  * Filters out WhatsApp coexistence echoes, live chat replies, and outbound messages.
  */
@@ -283,7 +394,7 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
   ).trim();
 
   // Extract Text Content (Button clicks, list selection, text message, or caption)
-  let userText: string = (
+  let rawUserText: string = (
     (typeof payload.message === 'string' ? payload.message : '') ||
     payload.message?.text ||
     payload.message?.caption ||
@@ -300,12 +411,37 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
     ''
   ).trim();
 
+  // PROTOCOL / REVOKE / DELETION GUARD:
+  // Drop WhatsApp message revocation ("You deleted this message"), emoji reactions, or protocol messages immediately
+  if (isProtocolOrRevokeEvent(payload, rawUserText)) {
+    logger.info(`[PROTOCOL/REVOKE] Dropping revoked message or protocol event for ${phoneNumber}.`);
+    res.status(200).json({ status: 'ignored', reason: 'message_revoked_or_deleted' });
+    return;
+  }
+
+  // Sanitize BotSailor synthetic tokens (#ATTACHMENT:...# |caption:...)
+  const sanitized = sanitizeBotSailorText(rawUserText);
+  if (sanitized.isRevoke) {
+    logger.info(`[REVOKE] Dropped sanitized revoke token for ${phoneNumber}.`);
+    res.status(200).json({ status: 'ignored', reason: 'message_revoked_or_deleted' });
+    return;
+  }
+
+  let userText = sanitized.cleanText;
+
   // LAYER 3: Extract Media Attachment safely (Isolated from stale CRM profile fields)
-  let mediaUrl: string | undefined = findMediaInPayload(payload);
+  let mediaUrl: string | undefined = findMediaInPayload(payload) || sanitized.attachmentUrl;
 
   // Extract media caption if userText is empty
   if (!userText && (payload.media_caption || payload.message?.caption)) {
     userText = (payload.media_caption || payload.message?.caption || '').trim();
+  }
+
+  // If inbound event has no actionable text, button, or media, ignore safely
+  if (!userText && !mediaUrl && !buttonPayload) {
+    logger.info(`[EMPTY] Inbound payload carries no actionable text, media, or button payload for ${phoneNumber}. Dropped.`);
+    res.status(200).json({ status: 'ignored', reason: 'empty_content' });
+    return;
   }
 
   // Acknowledge BotSailor immediately with 200 OK

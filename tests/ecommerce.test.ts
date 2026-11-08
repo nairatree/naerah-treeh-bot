@@ -5,7 +5,14 @@ import { orderService } from '../src/modules/orders/orderService.ts';
 import { chatSessionManager } from '../src/modules/chat/chatSessionManager.ts';
 import { chatFlowEngine } from '../src/modules/chat/chatFlowEngine.ts';
 import { followupService } from '../src/modules/followup/followupService.ts';
-import { isOutboundAgentMessage, extractTargetRecipientPhone, handleBotSailorWebhook, findMediaInPayload } from '../src/modules/webhooks/botsailorWebhook.ts';
+import {
+  isOutboundAgentMessage,
+  extractTargetRecipientPhone,
+  handleBotSailorWebhook,
+  findMediaInPayload,
+  isProtocolOrRevokeEvent,
+  sanitizeBotSailorText,
+} from '../src/modules/webhooks/botsailorWebhook.ts';
 import { systemSettings } from '../src/modules/system/systemSettings.ts';
 import { db } from '../src/database/supabaseClient.ts';
 import { config } from '../src/config/environment.ts';
@@ -955,5 +962,102 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
       text: 'start over',
     });
     assert.strictEqual(chatSessionManager.getSession(testPhone).state, 'IDLE');
+  });
+
+  test('24. Webhook Revocation & Protocol Event Blocker: Prevents infinite delete loops on "#ATTACHMENT:revoke#"', async () => {
+    // 1. Verify isProtocolOrRevokeEvent detects BotSailor revoke strings and protocol messages
+    assert.strictEqual(isProtocolOrRevokeEvent({ message: '#ATTACHMENT:revoke# |caption:' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ text: 'revoke' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ type: 'protocol' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ type: 'reaction' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ message: 'You deleted this message' }), true);
+    assert.strictEqual(isProtocolOrRevokeEvent({ message: 'I want to buy chopping board' }), false);
+
+    // 2. Verify sanitizeBotSailorText cleanly extracts revoke status and strips wrappers
+    const revokeSanitized = sanitizeBotSailorText('#ATTACHMENT:revoke# |caption:');
+    assert.strictEqual(revokeSanitized.isRevoke, true);
+    assert.strictEqual(revokeSanitized.cleanText, '');
+
+    const imageSanitized = sanitizeBotSailorText('#ATTACHMENT:https://example.com/item.jpg# |caption:How much is this?');
+    assert.strictEqual(imageSanitized.isRevoke, false);
+    assert.strictEqual(imageSanitized.cleanText, 'How much is this?');
+    assert.strictEqual(imageSanitized.attachmentUrl, 'https://example.com/item.jpg');
+
+    // 3. Verify handleBotSailorWebhook safely ignores revoke events with HTTP 200 without triggering bot search
+    let responseStatus = 0;
+    let responseBody: any = null;
+    const mockRes = {
+      status(code: number) {
+        responseStatus = code;
+        return {
+          json(body: any) {
+            responseBody = body;
+          },
+        };
+      },
+    } as any;
+
+    const mockReq = {
+      body: {
+        chat_id: '2347067297627',
+        message: '#ATTACHMENT:revoke# |caption:',
+      },
+    } as any;
+
+    await handleBotSailorWebhook(mockReq, mockRes);
+    assert.strictEqual(responseStatus, 200);
+    assert.strictEqual(responseBody?.status, 'ignored');
+    assert.strictEqual(responseBody?.reason, 'message_revoked_or_deleted');
+
+    // 4. Verify chatFlowEngine completely discards revoke strings directly
+    const targetPhone = '2347067297627';
+    chatSessionManager.resetSession(targetPhone);
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: targetPhone,
+      text: '#ATTACHMENT:revoke# |caption:',
+    });
+    // Session context should have NO lastPrompt set to 'UNAVAILABLE'
+    assert.notStrictEqual(chatSessionManager.getSession(targetPhone).context.lastPrompt, 'UNAVAILABLE');
+  });
+
+  test('25. Anti-Interference on Shared WhatsApp: "We\'ve seen it ma" & payment proof chatter remain 100% silent', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const customerPhone = '2347067297627';
+    chatSessionManager.resetSession(customerPhone);
+
+    // 1. Store agent replies to customer: "We've seen it ma"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: "We've seen it ma",
+    });
+
+    const session = chatSessionManager.getSession(customerPhone);
+    assert.strictEqual(session.state, 'IDLE');
+    // Must NOT trigger "Product Currently Unavailable"
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
+
+    // 2. Customer confirms payment: "Sent the money"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: 'Sent the money',
+    });
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
+
+    // 3. Customer or staff asks: "Check receipt"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: 'Check receipt',
+    });
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
+
+    // 4. WhatsApp message delete placeholder: "You deleted this message."
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: 'You deleted this message.',
+    });
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
   });
 });
