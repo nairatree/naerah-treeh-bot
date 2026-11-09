@@ -1070,13 +1070,22 @@ export class ChatFlowEngine {
   /**
    * Identifies casual, non-store personal chatter from family, friends, staff, and personal contacts
    * (e.g. "We've seen it ma", "Sent it", "Bro, where are you guys right now?", "Seen", "Call me")
-   * as well as WhatsApp system/revocation strings.
+   * as well as WhatsApp system/revocation strings, pure smileys/emojis, voice notes, and stickers.
    */
   isCasualNonStoreMessage(text: string): boolean {
     if (!text) return true;
-    const lower = text.toLowerCase().trim();
+    const trimmed = text.trim();
 
-    // 1. Synthetic tokens, revoke strings, WhatsApp system events
+    // 0. Pure Emoji / Smiley messages without words (e.g. 😊, 👍, 😂, ❤️, 🙏, 👌, 🔥, 👏)
+    // If text contains NO letters or numbers in any language, it is 100% a casual smiley / reaction!
+    const hasLettersOrNumbers = /[\p{L}\p{N}]/u.test(trimmed);
+    if (!hasLettersOrNumbers) {
+      return true;
+    }
+
+    const lower = trimmed.toLowerCase();
+
+    // 1. Synthetic tokens, revoke strings, WhatsApp system events, voice notes, stickers
     if (
       lower.includes('#attachment') ||
       lower.includes('revoke') ||
@@ -1085,6 +1094,8 @@ export class ChatFlowEngine {
       lower.includes('you deleted') ||
       lower.includes('this message was deleted') ||
       lower.includes('edited') ||
+      lower.includes('sticker') ||
+      lower.includes('voice note') ||
       text.includes('#') ||
       text.includes('|')
     ) {

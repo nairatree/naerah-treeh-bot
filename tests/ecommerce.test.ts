@@ -1067,4 +1067,69 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.strictEqual(session.state, 'IDLE');
     assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
   });
+
+  test('26. Voice Notes, Stickers, and Pure Smileys/Emojis (😊, 👍) Remain 100% Silent (Never Trigger Bot)', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const userPhone = '2348077998877';
+    chatSessionManager.resetSession(userPhone);
+
+    // 1. Voice Note / Audio payload: findMediaInPayload must refuse to extract it as a product photo
+    const audioPayload = {
+      chat_id: userPhone,
+      type: 'audio',
+      message: {
+        type: 'audio',
+        audio: { url: 'https://example.com/voice-note.ogg' },
+      },
+    };
+    const extractedAudioMedia = findMediaInPayload(audioPayload);
+    assert.strictEqual(extractedAudioMedia, undefined, 'Must NEVER treat audio voice notes as product photo media');
+    assert.strictEqual(isProtocolOrRevokeEvent(audioPayload), true, 'Voice notes must be recognized as ignorable protocol events');
+
+    // 2. WhatsApp Sticker payload: findMediaInPayload must refuse to extract it as a product photo
+    const stickerPayload = {
+      chat_id: userPhone,
+      type: 'sticker',
+      message: {
+        type: 'sticker',
+        sticker: { url: 'https://example.com/funny-sticker.webp' },
+      },
+    };
+    const extractedStickerMedia = findMediaInPayload(stickerPayload);
+    assert.strictEqual(extractedStickerMedia, undefined, 'Must NEVER treat stickers as product photo media');
+    assert.strictEqual(isProtocolOrRevokeEvent(stickerPayload), true, 'Stickers must be recognized as ignorable protocol events');
+
+    // 3. Pure Emojis / Smileys: isProtocolOrRevokeEvent must recognize pure smileys without words
+    assert.strictEqual(isProtocolOrRevokeEvent({}, '😊'), true, 'Smiley 😊 must be recognized as non-order reaction');
+    assert.strictEqual(isProtocolOrRevokeEvent({}, '👍'), true, 'Thumbs-up 👍 must be recognized as non-order reaction');
+    assert.strictEqual(isProtocolOrRevokeEvent({}, '😂😂😂'), true, 'Laughter emojis must be recognized as non-order reaction');
+    assert.strictEqual(isProtocolOrRevokeEvent({}, '❤️'), true, 'Heart emoji must be recognized as non-order reaction');
+
+    // 4. Inbound Smiley in ChatFlowEngine: customer sends "😊" or "👍"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: '😊',
+    });
+    let session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE', 'Smiley must NEVER trigger "Product Unavailable" notice');
+
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: '👍',
+    });
+    session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE', 'Thumbs up must NEVER trigger "Product Unavailable" notice');
+
+    // 5. Inbound Sticker token: "#ATTACHMENT:sticker# |caption:"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: userPhone,
+      text: '#ATTACHMENT:sticker# |caption:',
+    });
+    session = chatSessionManager.getSession(userPhone);
+    assert.strictEqual(session.state, 'IDLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
+    assert.notStrictEqual(session.context.lastPrompt, 'PHOTO_INQUIRY');
+  });
 });

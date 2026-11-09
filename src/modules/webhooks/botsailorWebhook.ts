@@ -23,46 +23,72 @@ export const CRM_PASSIVE_PROFILE_KEYS = [
 ];
 
 /**
+ * Returns true if a media URL represents an audio voice note or sticker rather than a product photo/video
+ */
+export function isAudioOrStickerUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  return /\.(ogg|opus|mp3|m4a|wav|aac|webp)(\?.*)?$/i.test(url);
+}
+
+/**
  * LAYER 3: Extract live media attached directly to the active incoming message event.
- * Explicitly ignores historical custom fields and passive CRM subscriber profiles.
+ * Only extracts genuine product photos and videos.
+ * Explicitly ignores audio voice notes, stickers, and passive CRM custom fields.
  */
 export function findMediaInPayload(payload: any): string | undefined {
   if (!payload || typeof payload !== 'object') return undefined;
 
-  // 1. Meta WhatsApp Cloud API active message format
-  const msg0 = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-  if (msg0) {
-    const metaMedia =
-      msg0.image?.url ||
-      msg0.video?.url ||
-      msg0.document?.url ||
-      msg0.audio?.url;
-    if (metaMedia) return String(metaMedia).trim();
+  // 1. Reject if message type indicates audio, voice note, sticker, or reaction
+  const msgType = String(
+    payload.type ||
+    payload.message?.type ||
+    payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.type ||
+    ''
+  ).toLowerCase().trim();
+
+  if (['audio', 'voice', 'sticker', 'reaction', 'protocol'].includes(msgType)) {
+    return undefined;
   }
 
-  // 2. BotSailor live message object format
+  // 2. Meta WhatsApp Cloud API active message format (PHOTOS & VIDEOS ONLY)
+  const msg0 = payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  if (msg0) {
+    if (msg0.type === 'sticker' || msg0.type === 'audio' || msg0.sticker || msg0.audio) {
+      return undefined;
+    }
+    const metaMedia = msg0.image?.url || msg0.video?.url;
+    if (metaMedia && !isAudioOrStickerUrl(String(metaMedia))) {
+      return String(metaMedia).trim();
+    }
+  }
+
+  // 3. BotSailor live message object format
   const activeMsg = payload.message;
   if (activeMsg && typeof activeMsg === 'object') {
+    if (activeMsg.type === 'sticker' || activeMsg.type === 'audio' || activeMsg.sticker || activeMsg.audio) {
+      return undefined;
+    }
     const msgMedia =
       activeMsg.image?.url ||
       activeMsg.video?.url ||
-      activeMsg.document?.url ||
       activeMsg.media_url ||
       activeMsg.attachment_url ||
       activeMsg.url;
-    if (msgMedia) return String(msgMedia).trim();
+    if (msgMedia && !isAudioOrStickerUrl(String(msgMedia))) {
+      return String(msgMedia).trim();
+    }
   }
 
-  // 3. Direct top-level active message event fields (Explicitly ignore passive CRM keys)
+  // 4. Direct top-level active message event fields (Explicitly ignore passive CRM keys)
   const directMedia =
-    payload.attachment_url ||
-    payload.media_url ||
     payload.image_url ||
     payload.video_url ||
+    payload.attachment_url ||
+    payload.media_url ||
     payload.media?.url ||
     payload.attachment?.url;
 
-  if (directMedia && typeof directMedia === 'string') {
+  if (directMedia && typeof directMedia === 'string' && !isAudioOrStickerUrl(directMedia)) {
     return directMedia.trim();
   }
 
@@ -71,8 +97,8 @@ export function findMediaInPayload(payload: any): string | undefined {
 
 /**
  * Detects whether an incoming webhook payload represents a protocol event,
- * message deletion/revocation ("You deleted this message"), or emoji reaction
- * that must NEVER trigger a bot response or catalog search.
+ * message deletion/revocation ("You deleted this message"), voice note, sticker,
+ * emoji reaction, or pure smiley message that must NEVER trigger a bot response or catalog search.
  */
 export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolean {
   if (!payload || typeof payload !== 'object') return false;
@@ -85,7 +111,19 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
     ''
   ).toLowerCase().trim();
 
-  if (['protocol', 'reaction', 'ephemeral', 'revoke', 'deleted', 'notification', 'edit', 'edited'].includes(msgType)) {
+  if ([
+    'protocol',
+    'reaction',
+    'ephemeral',
+    'revoke',
+    'deleted',
+    'notification',
+    'edit',
+    'edited',
+    'audio',
+    'voice',
+    'sticker',
+  ].includes(msgType)) {
     return true;
   }
 
@@ -109,11 +147,15 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
     'edited',
     'message_edit',
     'message_edited',
+    'audio',
+    'voice',
+    'sticker',
+    'reaction',
   ].includes(action)) {
     return true;
   }
 
-  // 4. BotSailor attachment revoke & edit tokens in any text field
+  // 4. BotSailor attachment tokens in any text field
   const rawFields = [
     typeof payload.message === 'string' ? payload.message : '',
     typeof payload.text === 'string' ? payload.text : '',
@@ -130,6 +172,9 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
       lower.includes('#attachment:revoke#') ||
       lower.includes('#attachment:edit#') ||
       lower.includes('#attachment:edited#') ||
+      lower.includes('#attachment:audio#') ||
+      lower.includes('#attachment:voice#') ||
+      lower.includes('#attachment:sticker#') ||
       lower.includes('revoke#') ||
       lower === 'revoke' ||
       lower.includes('deleted this message') ||
@@ -137,6 +182,15 @@ export function isProtocolOrRevokeEvent(payload: any, userText?: string): boolea
       lower.includes('this message was deleted')
     ) {
       return true;
+    }
+  }
+
+  // 5. Pure Emoji / Smiley Messages:
+  // If the user's message contains NO letters or numbers (only emojis, smileys, and punctuation like 😊, 👍, 😂, ❤️, 🙏)
+  if (userText && userText.trim().length > 0) {
+    const hasAlphanumeric = /[\p{L}\p{N}]/u.test(userText.trim());
+    if (!hasAlphanumeric) {
+      return true; // Pure smiley / emoji — drop completely!
     }
   }
 
@@ -156,11 +210,14 @@ export function sanitizeBotSailorText(rawText: string): {
 
   const trimmed = rawText.trim();
 
-  // 1. Detect revoke/deleted/edited event
+  // 1. Detect revoke/deleted/edited/audio/sticker events
   if (
     trimmed.includes('#ATTACHMENT:revoke#') ||
     trimmed.includes('#ATTACHMENT:edit#') ||
     trimmed.includes('#ATTACHMENT:edited#') ||
+    trimmed.includes('#ATTACHMENT:audio#') ||
+    trimmed.includes('#ATTACHMENT:voice#') ||
+    trimmed.includes('#ATTACHMENT:sticker#') ||
     trimmed.toLowerCase().includes('revoke#') ||
     trimmed.toLowerCase() === 'revoke' ||
     trimmed.toLowerCase().includes('deleted this message') ||
@@ -180,7 +237,10 @@ export function sanitizeBotSailorText(rawText: string): {
     if (
       attachToken.toLowerCase() === 'revoke' ||
       attachToken.toLowerCase() === 'edit' ||
-      attachToken.toLowerCase() === 'edited'
+      attachToken.toLowerCase() === 'edited' ||
+      attachToken.toLowerCase() === 'audio' ||
+      attachToken.toLowerCase() === 'voice' ||
+      attachToken.toLowerCase() === 'sticker'
     ) {
       return { cleanText: '', isRevoke: true };
     }
@@ -190,7 +250,7 @@ export function sanitizeBotSailorText(rawText: string): {
     return {
       cleanText: caption,
       isRevoke: false,
-      attachmentUrl: isUrl ? attachToken : undefined,
+      attachmentUrl: (isUrl && !isAudioOrStickerUrl(attachToken)) ? attachToken : undefined,
     };
   }
 
