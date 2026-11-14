@@ -336,14 +336,16 @@ export function isOutboundAgentMessage(payload: any, settings?: Record<string, a
     return true;
   }
 
-  // 6. Phone number matching business's own display phone number
+  // 6. Phone number matching business's own display phone number or authorized staff numbers
   const metadataPhone = String(changes?.value?.metadata?.display_phone_number || '').replace(/\D/g, '');
   const supportPhone = String(settings?.support_phone || config.SUPPORT_PHONE_NUMBER || '').replace(/\D/g, '');
   const botId = String(config.BOTSAILOR_WHATSAPP_BOT_ID || '').replace(/\D/g, '');
-  const messageFrom = String(changes?.value?.messages?.[0]?.from || payload.from || payload.sender || '').replace(/\D/g, '');
+  const messageFrom = String(changes?.value?.messages?.[0]?.from || payload.from || payload.sender || payload.sender_phone || '').replace(/\D/g, '');
 
   if (messageFrom && messageFrom.length >= 7) {
     if (
+      messageFrom === '2348103949939' ||
+      config.adminPhoneList.includes(messageFrom) ||
       (metadataPhone && messageFrom === metadataPhone) ||
       (supportPhone && supportPhone !== '2348000000000' && messageFrom === supportPhone) ||
       (botId && messageFrom === botId)
@@ -514,10 +516,12 @@ export async function handleBotSailorWebhook(req: Request, res: Response): Promi
     userText = (payload.media_caption || payload.message?.caption || '').trim();
   }
 
-  // If inbound event has no actionable text, button, or media, ignore safely
-  if (!userText && !mediaUrl && !buttonPayload) {
-    logger.info(`[EMPTY] Inbound payload carries no actionable text, media, or button payload for ${phoneNumber}. Dropped.`);
-    res.status(200).json({ status: 'ignored', reason: 'empty_content' });
+  // ZERO MEDIA & EMPTY TRIGGER GUARD:
+  // If inbound event has no actionable text and no button payload (even if image/video/audio/sticker is attached),
+  // NEVER trigger the bot! Drop immediately so customer photos, transfer receipts, screenshots, and videos are left for human staff.
+  if (!userText && !buttonPayload) {
+    logger.info(`[ZERO MEDIA TRIGGER] Inbound payload carries no actionable text or button payload for ${phoneNumber} (Media attached: ${mediaUrl ? 'Yes' : 'No'}). Dropped.`);
+    res.status(200).json({ status: 'ignored', reason: 'media_or_empty_without_text' });
     return;
   }
 

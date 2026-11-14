@@ -87,8 +87,8 @@ describe('NairaTree Stores E-Commerce Chatbot Engine Tests', () => {
       await sb.from('product_variants').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       await sb.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     }
-    // Ensure master bot switch remains ON as requested by merchant
-    await db.updateStoreSettings({ is_bot_active: true });
+    // Ensure master bot switch remains paused per merchant instruction ("turn off the bot for now")
+    await db.updateStoreSettings({ is_bot_active: false });
   });
   test('1. Catalog Search & Short Punchy Multi-Variant Presentation', async () => {
     const results = await catalogService.search('chopping board');
@@ -760,33 +760,31 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.strictEqual(chatSessionManager.isHumanTakeoverActive(phone), false);
   });
 
-  test('19. Photo Search Assistant: Handles Screenshots, Generic Inquiries & Passes Photo to Staff', async () => {
+  test('19. Zero Media Triggers: Images/Photos, Generic Inquiries ("Do you have this?") & Screenshots Never Trigger Bot Replies', async () => {
     const shopperPhone = '2348088990011';
     chatSessionManager.resetSession(shopperPhone);
 
-    // Scenario A: Customer sends screenshot without text
+    // Scenario A: Customer sends photo/screenshot without text into webhook
     const screenshotUrl = 'https://example.com/ad-screenshot-123.jpg';
-    await chatFlowEngine.processInboundMessage({
-      phoneNumber: shopperPhone,
-      text: '',
-      mediaUrl: screenshotUrl,
-    });
+    let respCode = 0;
+    let respData: any = null;
+    const fakeReqA = {
+      body: {
+        chat_id: shopperPhone,
+        media_url: screenshotUrl,
+      },
+    } as any;
+    const fakeResA = {
+      status(code: number) { respCode = code; return this; },
+      json(data: any) { respData = data; return this; },
+    } as any;
 
-    const sessionA = chatSessionManager.getSession(shopperPhone);
-    assert.strictEqual(sessionA.context.lastSentMediaUrl, screenshotUrl);
-    assert.strictEqual(sessionA.context.lastPrompt, 'PHOTO_INQUIRY');
+    await handleBotSailorWebhook(fakeReqA, fakeResA);
+    assert.strictEqual(respCode, 200);
+    assert.strictEqual(respData.status, 'ignored');
+    assert.strictEqual(respData.reason, 'media_or_empty_without_text', 'Photos without text must be dropped immediately');
 
-    // Scenario B: Customer taps "Talk to Staff"
-    await chatFlowEngine.processInboundMessage({
-      phoneNumber: shopperPhone,
-      buttonPayload: 'staff',
-    });
-
-    const sessionB = chatSessionManager.getSession(shopperPhone);
-    assert.strictEqual(sessionB.state, 'HANDED_OVER_TO_SUPPORT');
-    assert.strictEqual(sessionB.context.lastSentMediaUrl, screenshotUrl);
-
-    // Scenario C: Another customer sends photo with generic inquiry "Do you have this?"
+    // Scenario B: Customer sends photo with generic inquiry "Do you have this?" directly to engine
     const shopperPhone2 = '2348088990022';
     chatSessionManager.resetSession(shopperPhone2);
     const photoUrl2 = 'https://example.com/product-snapshot.jpg';
@@ -797,29 +795,12 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
       mediaUrl: photoUrl2,
     });
 
-    const sessionC = chatSessionManager.getSession(shopperPhone2);
-    assert.strictEqual(sessionC.context.lastSentMediaUrl, photoUrl2);
-    assert.strictEqual(sessionC.context.lastPrompt, 'PHOTO_INQUIRY');
+    const sessionB = chatSessionManager.getSession(shopperPhone2);
+    assert.strictEqual(sessionB.state, 'IDLE');
+    assert.notStrictEqual(sessionB.context.lastPrompt, 'PHOTO_INQUIRY', 'Must NEVER trigger unprompted photo greeting');
+    assert.notStrictEqual(sessionB.context.lastPrompt, 'UNAVAILABLE', 'Generic inquiry must not trigger unavailable notice');
 
-    // Customer taps "Enter Product Name"
-    await chatFlowEngine.processInboundMessage({
-      phoneNumber: shopperPhone2,
-      buttonPayload: 'enter_product',
-    });
-    assert.strictEqual(chatSessionManager.getSession(shopperPhone2).context.awaitingProductSearch, true);
-
-    // Customer types "chopping board"
-    await chatFlowEngine.processInboundMessage({
-      phoneNumber: shopperPhone2,
-      text: 'chopping board',
-    });
-
-    const sessionD = chatSessionManager.getSession(shopperPhone2);
-    assert.strictEqual(sessionD.state, 'SELECTING_VARIANT');
-    assert.ok(sessionD.context.currentProduct);
-    assert.strictEqual(sessionD.context.currentProduct.name, 'Premium Wooden Chopping Board');
-
-    // Scenario D: Customer sends photo with explicit product name in caption
+    // Scenario C: Customer sends photo with explicit product name in caption
     const shopperPhone3 = '2348088990033';
     chatSessionManager.resetSession(shopperPhone3);
     const photoUrl3 = 'https://example.com/knapsack-photo.jpg';
@@ -830,11 +811,11 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
       mediaUrl: photoUrl3,
     });
 
-    const sessionE = chatSessionManager.getSession(shopperPhone3);
-    assert.strictEqual(sessionE.state, 'SELECTING_VARIANT');
-    assert.ok(sessionE.context.currentProduct);
-    assert.strictEqual(sessionE.context.currentProduct.name, 'Heavy-Duty 2-in-1 Knapsack Sprayer');
-    assert.strictEqual(sessionE.context.lastSentMediaUrl, photoUrl3);
+    const sessionC = chatSessionManager.getSession(shopperPhone3);
+    assert.strictEqual(sessionC.state, 'SELECTING_VARIANT');
+    assert.ok(sessionC.context.currentProduct);
+    assert.strictEqual(sessionC.context.currentProduct.name, 'Heavy-Duty 2-in-1 Knapsack Sprayer');
+    assert.strictEqual(sessionC.context.lastSentMediaUrl, photoUrl3, 'Photo must be retained for staff order alert');
   });
 
   test('20. Layer 3: Stale CRM Profile & Custom Fields Isolation', async () => {
@@ -1131,5 +1112,105 @@ Kitchen Wares,Non-Stick Frying Pan,15000,"Small (20cm), Large (28cm)","Matte Bla
     assert.strictEqual(session.state, 'IDLE');
     assert.notStrictEqual(session.context.lastPrompt, 'UNAVAILABLE');
     assert.notStrictEqual(session.context.lastPrompt, 'PHOTO_INQUIRY');
+  });
+
+  test('27. 10-15 Hours Silence Auto-Restart: Inactive Customers Cleanly Restart Communication From Scratch', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const silentCustomerPhone = '2348099112233';
+    chatSessionManager.resetSession(silentCustomerPhone);
+
+    // 1. Customer was stuck in middle of variant selection
+    chatSessionManager.setState(silentCustomerPhone, 'SELECTING_VARIANT');
+    chatSessionManager.setCurrentProduct(silentCustomerPhone, {
+      id: 'test-silence-p1',
+      name: 'Premium Wooden Chopping Board',
+      category_name: 'Kitchen',
+      base_price: 8500,
+      description: 'Test',
+      media_urls: [],
+      is_available: true,
+    });
+    chatSessionManager.setSelectedQuantity(silentCustomerPhone, 3);
+    assert.strictEqual(chatSessionManager.getSession(silentCustomerPhone).state, 'SELECTING_VARIANT');
+
+    // Simulate 15 hours of silence (15 * 60 * 60 * 1000)
+    const fifteenHoursAgo = Date.now() - (15 * 60 * 60 * 1000);
+    const sessionRef = chatSessionManager.getSession(silentCustomerPhone);
+    sessionRef.updatedAt = fifteenHoursAgo;
+
+    // Accessing session triggers 10-15 hour silence auto-restart
+    const refreshed = chatSessionManager.getSession(silentCustomerPhone);
+    assert.strictEqual(refreshed.state, 'IDLE', 'Session must auto-restart from IDLE after 15 hours of silence');
+    assert.strictEqual(refreshed.context.selectedQuantity, undefined, 'Old drafts must be completely wiped');
+    assert.strictEqual(refreshed.context.currentProduct, undefined, 'Old product must be cleared');
+
+    // 2. Customer was in HANDED_OVER_TO_SUPPORT and human takeover was active
+    const supportCustomerPhone = '2348099112244';
+    chatSessionManager.resetSession(supportCustomerPhone);
+    chatSessionManager.handoverToSupport(supportCustomerPhone);
+    chatSessionManager.activateHumanTakeover(supportCustomerPhone);
+    assert.strictEqual(chatSessionManager.isHumanTakeoverActive(supportCustomerPhone), true);
+
+    // Simulate 15 hours of silence
+    const supportSessionRef = chatSessionManager.getSession(supportCustomerPhone);
+    supportSessionRef.updatedAt = fifteenHoursAgo;
+
+    // After 15 hours silence: human takeover expires and session state cleanly returns to IDLE
+    assert.strictEqual(chatSessionManager.isHumanTakeoverActive(supportCustomerPhone), false, 'Takeover must expire after 15 hours of customer silence');
+    const refreshedSupport = chatSessionManager.getSession(supportCustomerPhone);
+    assert.strictEqual(refreshedSupport.state, 'IDLE', 'Support handover must cleanly auto-restart after 15 hours of silence');
+
+    // Customer sends fresh product inquiry after 15 hours away
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: supportCustomerPhone,
+      text: 'chopping board',
+    });
+    const finalSession = chatSessionManager.getSession(supportCustomerPhone);
+    assert.strictEqual(finalSession.state, 'SELECTING_VARIANT', 'Customer must seamlessly start fresh order without flow collision');
+    assert.strictEqual(finalSession.context.currentProduct?.name, 'Premium Wooden Chopping Board');
+  });
+
+  test('28. Owner & Staff Chat Immunity: Keywords ("store", "shop", "start") Inside Sentences Never Hijack Bot', async () => {
+    await db.updateStoreSettings({ is_bot_active: true });
+    const customerPhone = '2348099887711';
+    chatSessionManager.resetSession(customerPhone);
+    chatSessionManager.activateHumanTakeover(customerPhone);
+    assert.strictEqual(chatSessionManager.isHumanTakeoverActive(customerPhone), true);
+
+    // 1. Staff chatting with customer says sentence containing keyword "store"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: 'We have it in store, let me know if you want it.',
+    });
+    // Verification: "store" inside a sentence must NOT trigger resume command!
+    assert.strictEqual(chatSessionManager.isHumanTakeoverActive(customerPhone), true, 'Sentence containing "store" must NOT unpause bot');
+
+    // 2. Staff says sentence containing "shop"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: 'Our shop is open until 6pm today.',
+    });
+    assert.strictEqual(chatSessionManager.isHumanTakeoverActive(customerPhone), true, 'Sentence containing "shop" must NOT unpause bot');
+
+    // 3. Staff says sentence containing "start"
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: customerPhone,
+      text: 'We can start dispatch immediately.',
+    });
+    assert.strictEqual(chatSessionManager.isHumanTakeoverActive(customerPhone), true, 'Sentence containing "start" must NOT unpause bot');
+
+    // 4. Staff number (2348103949939) sends a message directly to engine
+    const staffPhone = '2348103949939';
+    await chatFlowEngine.processInboundMessage({
+      phoneNumber: staffPhone,
+      text: 'chopping board',
+    });
+    // Staff immunity ensures staff phone never gets treated as a shopper
+    assert.strictEqual(chatSessionManager.getSession(staffPhone).state, 'IDLE');
+    assert.strictEqual(chatSessionManager.getSession(staffPhone).context.currentProduct, undefined, 'Staff phone must NEVER trigger shopping flow');
+
+    // 5. Inbound webhook detecting staff phone (2348103949939) as sender
+    assert.strictEqual(isOutboundAgentMessage({ sender: '2348103949939' }), true, 'Staff phone sender must be recognized as outbound agent message');
+    assert.strictEqual(isOutboundAgentMessage({ from: '2348103949939' }), true, 'Staff phone from must be recognized as outbound agent message');
   });
 });

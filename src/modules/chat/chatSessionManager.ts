@@ -7,6 +7,7 @@ class ChatSessionManager {
   private humanTakeovers = new Map<string, number>(); // cleanPhone -> expiry timestamp
   public readonly TTL_MS = 24 * 60 * 60 * 1000; // 24 Hours Session Window
   public readonly SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 Hours Inactivity Timeout (Layer 4)
+  public readonly MAX_SILENCE_RESET_MS = 10 * 60 * 60 * 1000; // 10-15 Hours Silence Auto-Restart: resets EVERYTHING to IDLE including support handover & takeovers
   public readonly DEFAULT_TAKEOVER_MS = 24 * 60 * 60 * 1000; // 24 Hours Human Takeover Mute Window (Layer 2)
 
   getSession(phoneNumber: string): ChatSession {
@@ -15,6 +16,9 @@ class ChatSessionManager {
     let session = this.sessions.get(cleanPhone);
 
     if (!session || now - session.updatedAt > this.TTL_MS) {
+      if (session && now - session.updatedAt > this.TTL_MS) {
+        this.humanTakeovers.delete(cleanPhone);
+      }
       session = {
         phoneNumber: cleanPhone,
         state: 'IDLE',
@@ -24,11 +28,24 @@ class ChatSessionManager {
         updatedAt: now,
       };
       this.sessions.set(cleanPhone, session);
-    } else if (session.state !== 'IDLE' && session.state !== 'HANDED_OVER_TO_SUPPORT' && now - session.updatedAt > this.SESSION_TIMEOUT_MS) {
-      // Layer 4: Inactivity timeout (2 hours) - automatically expire back to IDLE, clear invalid attempts & uncommitted drafts
-      logger.info(`Session for ${cleanPhone} timed out after 2 hours. Resetting to IDLE.`);
-      session.state = 'IDLE';
-      session.context = { lastActiveTime: now };
+    } else {
+      const silenceDuration = now - session.updatedAt;
+
+      // 10-15 Hours Silence Auto-Restart:
+      // If customer has been silent for >= 10-15 hours, discard any broken/uncompleted flow,
+      // support handover, or human takeover, and cleanly restart from IDLE with clean context
+      if (silenceDuration >= this.MAX_SILENCE_RESET_MS) {
+        logger.info(`Session for ${cleanPhone} silent for ${(silenceDuration / 3600000).toFixed(1)} hours (>= 10h threshold). Auto-restarting fresh from IDLE and clearing all takeovers.`);
+        session.state = 'IDLE';
+        session.context = { lastActiveTime: now };
+        this.humanTakeovers.delete(cleanPhone);
+      }
+      // Layer 4: Inactivity timeout (2 hours) for active shopping flows - automatically expire back to IDLE
+      else if (session.state !== 'IDLE' && session.state !== 'HANDED_OVER_TO_SUPPORT' && silenceDuration > this.SESSION_TIMEOUT_MS) {
+        logger.info(`Session for ${cleanPhone} timed out after 2 hours. Resetting to IDLE.`);
+        session.state = 'IDLE';
+        session.context = { lastActiveTime: now };
+      }
     }
 
     session.updatedAt = now;
@@ -137,10 +154,21 @@ class ChatSessionManager {
     const expiry = this.humanTakeovers.get(cleanPhone);
     if (!expiry) return false;
 
-    if (Date.now() > expiry) {
+    const now = Date.now();
+    if (now > expiry) {
       this.humanTakeovers.delete(cleanPhone);
       return false;
     }
+
+    // 10-15 Hours Silence Auto-Restart:
+    // If the customer has been silent for >= 10 hours, expire the takeover to allow fresh start
+    const session = this.sessions.get(cleanPhone);
+    if (session && now - session.updatedAt >= this.MAX_SILENCE_RESET_MS) {
+      logger.info(`[HUMAN TAKEOVER] Expired due to customer silence >= 10 hours for ${cleanPhone}.`);
+      this.humanTakeovers.delete(cleanPhone);
+      return false;
+    }
+
     return true;
   }
 

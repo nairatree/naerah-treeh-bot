@@ -30,16 +30,24 @@ export class ChatFlowEngine {
     const supportPhoneClean = (settings.support_phone || config.SUPPORT_PHONE_NUMBER).replace(/\D/g, '');
 
     // 1. Check for Admin /add WhatsApp Command (Authorized staff/admins can upload products anytime!)
+    const isOwnerOrStaff =
+      config.adminPhoneList.includes(cleanPhone) ||
+      cleanPhone === '2348103949939' ||
+      (supportPhoneClean && supportPhoneClean !== '2348000000000' && cleanPhone === supportPhoneClean);
+
     if (lowerText.startsWith('/add')) {
-      const isAdmin =
-        config.adminPhoneList.includes(cleanPhone) ||
-        config.adminPhoneList.includes('2348000000000') ||
-        cleanPhone === supportPhoneClean ||
-        cleanPhone === '2348103949939';
-      if (isAdmin) {
+      if (isOwnerOrStaff || config.adminPhoneList.includes('2348000000000')) {
         await this.handleAdminAddProduct(cleanPhone, cleanText, mediaUrl);
         return;
       }
+    }
+
+    // STAFF IMMUNITY GUARD:
+    // If a message comes from the store owner or staff number, NEVER process as a shopper!
+    // Prevents self-trigger loops and protects staff conversations.
+    if (isOwnerOrStaff) {
+      logger.info(`[STAFF IMMUNITY] Message from store owner/staff ${cleanPhone}: "${cleanText}". Ignored to prevent bot self-trigger.`);
+      return;
     }
 
     // REVOKE & PROTOCOL GUARD: Never process WhatsApp message revoke/delete events or synthetic attachment tokens
@@ -63,18 +71,28 @@ export class ChatFlowEngine {
     }
 
     // LAYER 2: Automatic Human Takeover & Bot Auto-Mute Check
-    // When a human agent has taken over the chat, the bot remains 100% silent unless customer explicitly types a resume command
+    // When a human agent has taken over the chat, the bot remains 100% silent unless customer explicitly types an EXACT resume command
     if (chatSessionManager.isHumanTakeoverActive(cleanPhone)) {
+      const exactResumeCommands = [
+        'menu',
+        'start',
+        'restart',
+        'reset',
+        'clear',
+        'bot',
+        't-bot',
+        'teebot',
+        'tbot',
+        'hello t-bot',
+        'hello teebot',
+        'shop',
+        'store',
+        'catalog',
+        'main menu',
+      ];
       const isBotResumeCommand =
-        btnPayloadClean === 'menu' ||
-        btnPayloadClean === 'start' ||
-        btnPayloadClean === 'restart' ||
-        btnPayloadClean === 'reset' ||
-        btnPayloadClean === 'shop' ||
-        btnPayloadClean === 'catalog' ||
-        ['menu', 'start', 'restart', 'reset', 'clear', 'bot', 't-bot', 'teebot', 'tbot', 'hello t-bot', 'hello teebot', 'shop', 'store', 'catalog'].some((cmd) =>
-          cleanLower === cmd || cleanLower.includes(cmd)
-        );
+        exactResumeCommands.includes(btnPayloadClean) ||
+        exactResumeCommands.includes(cleanLower);
 
       if (isBotResumeCommand) {
         logger.info(`[HUMAN TAKEOVER] Customer ${cleanPhone} explicitly typed resume command "${cleanText}". Unpausing bot.`);
@@ -128,12 +146,32 @@ export class ChatFlowEngine {
     }
 
     // 3. Check for Live Human Support Trigger (Buttons, keywords, or fallback #1)
+    const supportExactPhrases = [
+      'staff',
+      'support',
+      'human',
+      'agent',
+      'representative',
+      'customer care',
+      'call me',
+      'talk to agent',
+      'talk to support',
+      'talk to staff',
+      'speak with staff',
+      'speak to staff',
+      'connect with our staff',
+      'connect with staff',
+      'connect to staff',
+      'connect staff',
+      'talk to human',
+      'human assistance',
+    ];
+
     const isSupportTrigger =
       btnPayloadClean === 'staff' ||
       btnPayloadClean === 'support' ||
-      ['agent', 'support', 'human', 'help', 'representative', 'talk to agent', 'talk to support', 'talk to staff', 'speak with staff', 'connect with our staff', 'connect with staff', 'connect to staff', 'connect staff', 'talk to human', 'human assistance', 'staff', 'customer care', 'call me'].some((k) =>
-        lowerText.includes(k)
-      ) ||
+      supportExactPhrases.includes(cleanLower) ||
+      /\b(talk to (?:agent|support|staff|human)|speak (?:to|with) staff|connect (?:with |to )?staff|human assistance|customer care|call me)\b/i.test(lowerText) ||
       ((session.context.lastPrompt === 'UNAVAILABLE' || session.context.lastPrompt === 'PHOTO_INQUIRY') && (lowerText === '1' || btnPayloadClean === '1'));
 
     if (isSupportTrigger) {
@@ -154,15 +192,14 @@ export class ChatFlowEngine {
     }
 
     // 4. Human Support Handover Protection:
-    // If user is currently handed over to staff, don't interfere unless they explicitly type MENU/RESTART or tap MENU button
+    // If user is currently handed over to staff, don't interfere unless they explicitly type an EXACT resume command (e.g. MENU)
     if (session.state === 'HANDED_OVER_TO_SUPPORT') {
       const cleanCmd = lowerText.replace(/[^\w\s]/g, '').trim();
+      const exactResumeCommands = ['menu', 'main menu', 'start', 'restart', 'reset', 'bot', 't-bot', 'teebot'];
       const isResumeMenu =
-        btnPayloadClean === 'menu' ||
-        btnPayloadClean === 'main_menu' ||
-        ['menu', 'start', 'restart', 'reset', 'main menu'].some((cmd) =>
-          cleanCmd.includes(cmd) || lowerText.includes(cmd)
-        );
+        exactResumeCommands.includes(btnPayloadClean) ||
+        exactResumeCommands.includes(cleanCmd) ||
+        exactResumeCommands.includes(lowerText);
 
       if (isResumeMenu) {
         chatSessionManager.clearHumanTakeover(cleanPhone);
@@ -295,34 +332,10 @@ export class ChatFlowEngine {
       }
     }
 
-    // 8b. Photo Search Assistant (Screenshots, Instagram/Facebook ads photos, camera uploads)
-    // LAYER 3 GUARD: NEVER trigger photo search if the inbound message is a casual greeting, keyword trigger, or reset command!
-    const isGreetingOrReset =
-      this.isStandaloneGreeting(cleanText) ||
-      universalResetCommands.includes(cleanLower) ||
-      btnPayloadClean.length > 0;
-
-    if (mediaUrl && !isGreetingOrReset) {
+    // 8b. Photo Context Retention: Retain mediaUrl in context for staff order notifications,
+    // but NEVER trigger unprompted chatbot replies on photos/images/videos!
+    if (mediaUrl) {
       session.context.lastSentMediaUrl = mediaUrl;
-
-      // In IDLE or BROWSING state:
-      if (session.state === 'IDLE' || session.state === 'BROWSING_PRODUCTS') {
-        let matchingProductFound = false;
-        if (cleanText.length >= 2 && !this.isGenericPhotoCaption(cleanText)) {
-          const adProduct = this.extractProductFromAdMessage(cleanText);
-          const cleanedQuery = this.cleanSearchQuery(cleanText);
-          const targetQuery = adProduct || cleanedQuery || cleanText;
-          const results = await catalogService.search(targetQuery);
-          if (results.length > 0) {
-            matchingProductFound = true;
-          }
-        }
-
-        if (!matchingProductFound) {
-          await this.handlePhotoInquiry(cleanPhone, mediaUrl, cleanText, session);
-          return;
-        }
-      }
     }
 
     // 9. Smart Greeting with Interactive Buttons (Hybrid Model)
@@ -1080,6 +1093,12 @@ export class ChatFlowEngine {
     // If text contains NO letters or numbers in any language, it is 100% a casual smiley / reaction!
     const hasLettersOrNumbers = /[\p{L}\p{N}]/u.test(trimmed);
     if (!hasLettersOrNumbers) {
+      return true;
+    }
+
+    // 0b. Generic captions and vague questions without specific product names
+    // (e.g. "Do you have this?", "Check this", "How much is this?", "Is this available?", "Price please")
+    if (this.isGenericPhotoCaption(trimmed)) {
       return true;
     }
 
